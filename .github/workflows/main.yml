@@ -112,13 +112,21 @@ jobs:
             --set properties.alwaysOn=true properties.healthCheckPath="/healthz" || true
           az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
             --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}"
+      - name: Gerar compose final p/ Azure (expande variáveis)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export REGISTRY="${{ env.REGISTRY }}"
+          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          envsubst < docker-compose.azure.yml > docker-compose.final.yml
+          echo "==== docker-compose.final.yml ===="
+          cat docker-compose.final.yml
 
       - name: Deploy docker-compose ao App Service
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ env.WEBAPP_NAME }}
-          configuration-file: ./${{ env.COMPOSE_FILE }}
-          images: ${{ needs.build-and-push.outputs.images }}
+          configuration-file: ./docker-compose.final.yml  
 
       - name: Dump App Settings (porta e health)
         shell: bash
