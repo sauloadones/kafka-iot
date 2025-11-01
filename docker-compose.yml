@@ -1,4 +1,16 @@
 services:
+  # --- Edge (reverse proxy HTTP único) ---
+  edge:
+    build: ./ops/edge
+    image: ${REGISTRY}/edge:${IMAGE_TAG}
+    depends_on:
+      - redpanda-console
+      - schema-registry
+      - redis-commander
+      - mqtt-kafka-bridge
+    ports:
+      - "80:80"  # única porta pública no App ServiceCA porta pública no App Service
+
   # --- Kafka (Redpanda) ---
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
@@ -7,52 +19,49 @@ services:
       - redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0
       - --kafka-addr PLAINTEXT://0.0.0.0:29092
       - --advertise-kafka-addr PLAINTEXT://redpanda:29092
-    ports:
-      - "9092:9092"
-      - "9644:9644"
+    # NÃO exponha 9092 publicamente no App Service
+    expose:
+      - "29092"
+      - "9644"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
 
-  # --- Schema Registry---
+  # --- Schema Registry ---
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
     container_name: schema-registry
-    depends_on:
-      - redpanda
-    ports:
-      - "8083:8083"
+    depends_on: [ redpanda ]
+    expose:
+      - "8083"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'redpanda:29092'
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8083
 
-
   # --- Redis ---
   redis:
-    image: "redis:alpine"
+    image: redis:alpine
     container_name: redis
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
 
-  # --- RedisInsight (Interface Gráfica para Redis) ---
+  # --- Redis GUI ---
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: redis-commander
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
+    depends_on: [ redis ]
+    expose:
+      - "8081"
     environment:
       REDIS_HOSTS: local:redis:6379
 
-  # --- Redpanda Console (Interface Gráfica) ---
+  # --- Redpanda Console ---
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
     container_name: redpanda-console
-    depends_on:
-      - redpanda
-    ports:
-      - "8080:8080"
+    depends_on: [ redpanda ]
+    expose:
+      - "8080"
     environment:
       KAFKA_BROKERS: "redpanda:29092"
 
@@ -60,31 +69,30 @@ services:
   mqtt-kafka-bridge:
     build:
       context: ./python-bridge
+    image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
     container_name: mqtt-kafka-bridge
     restart: always
-    ports:
-      - "8000:8000"
-    depends_on:
-      - redpanda
+    expose:
+      - "8000"
+    depends_on: [ redpanda ]
     environment:
       MQTT_BROKER: "broker.hivemq.com"
       MQTT_PORT: 1883
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
 
+  # --- Consumer Kafka → Redis ---
   kafka-redis-consumer:
     build:
       context: ./kafka-redis-consumer
+    image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
     container_name: kafka-redis-consumer
     restart: always
-    depends_on:
-      - redpanda
-      - redis
+    depends_on: [ redpanda, redis ]
     environment:
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
       REDIS_HOST: "redis"
-
 
 volumes:
   redpanda_data:
