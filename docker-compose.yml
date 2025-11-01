@@ -1,16 +1,11 @@
-version: "3.8"
+
 
 services:
   edge:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: ops/edge/Dockerfile
     ports: ["80:80"]
-    volumes:
-      - ./nginx-health.conf:/etc/nginx/conf.d/zzz-health.conf:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:24.3.7

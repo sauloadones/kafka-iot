@@ -1,3 +1,5 @@
 FROM nginx:alpine
-RUN apk add --no-cache curl
-COPY default.conf /etc/nginx/conf.d/default.conf
+# opcional: zere configs default antes
+RUN rm -f /etc/nginx/conf.d/*.conf
+COPY ops/edge/default.conf /etc/nginx/conf.d/default.conf
+
