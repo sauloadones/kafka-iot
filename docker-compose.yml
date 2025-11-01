@@ -2,17 +2,11 @@ version: "3.8"
 
 services:
   edge:
-    build: ./ops/edge
-    image: ${REGISTRY}/edge:${IMAGE_TAG}   # <- necessário pro App Service puxar
+    image: nginxdemos/hello
     ports:
       - "80:80"
-    depends_on:
-      - redpanda-console
-      - schema-registry
-      - redis-commander
-      - mqtt-kafka-bridge
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost/healthz >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
