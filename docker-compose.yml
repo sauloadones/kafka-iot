@@ -18,7 +18,6 @@ services:
   # --- Kafka (Redpanda) ---
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
-    container_name: redpanda
     command:
       - redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0
       - --kafka-addr PLAINTEXT://0.0.0.0:29092
@@ -33,7 +32,6 @@ services:
   # --- Schema Registry ---
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
-    container_name: schema-registry
     depends_on: [ redpanda ]
     expose:
       - "8083"
@@ -45,14 +43,12 @@ services:
   # --- Redis ---
   redis:
     image: redis:alpine
-    container_name: redis
     expose:
       - "6379"
 
   # --- Redis GUI ---
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: redis-commander
     depends_on: [ redis ]
     expose:
       - "8081"
@@ -62,7 +58,6 @@ services:
   # --- Redpanda Console ---
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
-    container_name: redpanda-console
     depends_on: [ redpanda ]
     expose:
       - "8080"
@@ -74,7 +69,6 @@ services:
     build:
       context: ./python-bridge
     image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
-    container_name: mqtt-kafka-bridge
     restart: always
     expose:
       - "8000"
@@ -90,7 +84,6 @@ services:
     build:
       context: ./kafka-redis-consumer
     image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
-    container_name: kafka-redis-consumer
     restart: always
     depends_on: [ redpanda, redis ]
     environment:
