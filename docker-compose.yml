@@ -1,8 +1,9 @@
+version: "3.8"
+
 services:
-  # --- Edge (reverse proxy HTTP único) ---
   edge:
     build: ./ops/edge
-    # NÃO use container_name no App Service
+    image: ${REGISTRY}/edge:${IMAGE_TAG}   # <- necessário pro App Service puxar
     ports:
       - "80:80"
     depends_on:
@@ -11,67 +12,55 @@ services:
       - redis-commander
       - mqtt-kafka-bridge
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost/healthz >/dev/null || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
-  # --- Kafka (Redpanda) ---
+
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     command:
       - redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0
       - --kafka-addr PLAINTEXT://0.0.0.0:29092
       - --advertise-kafka-addr PLAINTEXT://redpanda:29092
-    # NÃO exponha 9092 publicamente no App Service
-    expose:
-      - "29092"
-      - "9644"
+    expose: ["29092","9644"]
+    # Persistência real no App Service = /home
     volumes:
-      - redpanda_data:/var/lib/redpanda/data
+      - /home/redpanda/data:/var/lib/redpanda/data
 
-  # --- Schema Registry ---
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
     depends_on: [ redpanda ]
-    expose:
-      - "8083"
+    expose: ["8083"]
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'redpanda:29092'
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8083
 
-  # --- Redis ---
   redis:
     image: redis:alpine
-    expose:
-      - "6379"
+    expose: ["6379"]
 
-  # --- Redis GUI ---
   redis-commander:
     image: rediscommander/redis-commander:latest
     depends_on: [ redis ]
-    expose:
-      - "8081"
+    expose: ["8081"]
     environment:
       REDIS_HOSTS: local:redis:6379
 
-  # --- Redpanda Console ---
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
     depends_on: [ redpanda ]
-    expose:
-      - "8080"
+    expose: ["8080"]
     environment:
       KAFKA_BROKERS: "redpanda:29092"
 
-  # --- Python Bridge MQTT → Kafka ---
   mqtt-kafka-bridge:
     build:
       context: ./python-bridge
     image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
     restart: always
-    expose:
-      - "8000"
+    expose: ["8000"]
     depends_on: [ redpanda ]
     environment:
       MQTT_BROKER: "broker.hivemq.com"
@@ -79,7 +68,6 @@ services:
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
 
-  # --- Consumer Kafka → Redis ---
   kafka-redis-consumer:
     build:
       context: ./kafka-redis-consumer
@@ -90,6 +78,3 @@ services:
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
       REDIS_HOST: "redis"
-
-volumes:
-  redpanda_data:
