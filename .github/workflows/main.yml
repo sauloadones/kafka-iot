@@ -66,12 +66,10 @@ jobs:
             | awk '/image:/ {print $2}' \
             | tr -d "\"'" > images.txt
 
-          # escreve saída multilinha no GITHUB_OUTPUT de forma atômica
-          {
-            echo 'list<<EOF'
-            cat images.txt
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          { echo 'list<<EOF'; cat images.txt; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+
+          echo "==== Imagens detectadas ===="
+          cat images.txt
 
   deploy:
     needs: build-and-push
@@ -96,8 +94,54 @@ jobs:
             WEBSITES_PORT=80 \
             WEBSITES_CONTAINER_START_TIME_LIMIT=240 >/dev/null
 
-      - name: Ajustar Health Check (/healthz) e Always On
+      # tenta via webapp update; se não rolar, aplica fallback com az resource update
+      - name: Health Check e Always On (tentativa direta)
         shell: bash
         run: |
           set -euo pipefail
-          if ! az webapp update
+          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --set siteConfig.alwaysOn=true siteConfig.healthCheckPath="/healthz" || true
+
+      - name: Health Check e Always On (fallback)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az resource update -g "$RESOURCE_GROUP" \
+            --resource-type "Microsoft.Web/sites/config" \
+            -n "${WEBAPP_NAME}/web" \
+            --set properties.alwaysOn=true properties.healthCheckPath="/healthz" || true
+          az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}"
+
+      - name: Deploy docker-compose ao App Service
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.WEBAPP_NAME }}
+          configuration-file: ./${{ env.COMPOSE_FILE }}
+          images: ${{ needs.build-and-push.outputs.images }}
+
+      - name: Debug HTTP (/healthz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
+          echo "HEAD https://$HOST/healthz"
+          curl -skI "https://$HOST/healthz" || true
+
+      - name: Verificar saúde pós-deploy (/healthz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
+          echo "Verificando https://$HOST/healthz"
+          for i in {1..120}; do
+            CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$HOST/healthz" || true)
+            if [[ "$CODE" =~ ^20[0-9]$ || "$CODE" =~ ^30[0-9]$ ]]; then
+              echo "OK: $CODE"
+              exit 0
+            fi
+            echo "Aguardando... (status=$CODE)"
+            sleep 5
+          done
+          echo "Falha: healthcheck não respondeu 2xx/3xx."
+          exit 1
