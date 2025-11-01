@@ -61,16 +61,17 @@ jobs:
           export REGISTRY="${{ env.REGISTRY }}"
           export REGISTRY_PREFIX="${REGISTRY}/"
           export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+
           docker compose -f "${COMPOSE_FILE}" config \
             | awk '/image:/ {print $2}' \
             | tr -d "\"'" > images.txt
 
-          echo "list<<EOF" >> $GITHUB_OUTPUT
-          cat images.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          echo "==== Imagens detectadas ===="
-          cat images.txt
+          # escreve saída multilinha no GITHUB_OUTPUT de forma atômica
+          {
+            echo 'list<<EOF'
+            cat images.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build-and-push
