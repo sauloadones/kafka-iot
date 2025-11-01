@@ -2,15 +2,19 @@ services:
   # --- Edge (reverse proxy HTTP único) ---
   edge:
     build: ./ops/edge
-    image: ${REGISTRY}/edge:${IMAGE_TAG}
+    # NÃO use container_name no App Service
+    ports:
+      - "80:80"
     depends_on:
       - redpanda-console
       - schema-registry
       - redis-commander
       - mqtt-kafka-bridge
-    ports:
-      - "80:80"  # única porta pública no App ServiceCA porta pública no App Service
-
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
   # --- Kafka (Redpanda) ---
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
