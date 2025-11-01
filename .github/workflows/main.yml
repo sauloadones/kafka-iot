@@ -80,16 +80,24 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # App Settings com credenciais do ACR (sem RBAC extra)
+      # App Settings só com credenciais do ACR (sem WEBSITES_PORT)
       - name: Configurar credenciais do registro no App Service
         shell: bash
         run: |
           set -euo pipefail
           az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --settings \
-            DOCKER_REGISTRY_SERVER_URL="https://${{ env.REGISTRY }}" \
+            DOCKER_REGISTRY_SERVER_URL="https://${REGISTRY}" \
             DOCKER_REGISTRY_SERVER_USERNAME="${{ secrets.ACR_USERNAME }}" \
             DOCKER_REGISTRY_SERVER_PASSWORD="${{ secrets.ACR_PASSWORD }}" \
-            WEBSITES_PORT=80 >/dev/null
+            WEBSITES_ENABLE_APP_SERVICE_STORAGE=true >/dev/null
+
+      # Health check e Always On no recurso (App Service vai tirar instância do LB se /healthz != 200)
+      - name: Ajustar Health Check e Always On
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp config set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --health-check-path "/healthz" --always-on true >/dev/null
 
       - name: Deploy docker-compose ao App Service
         uses: azure/webapps-deploy@v2
@@ -98,13 +106,23 @@ jobs:
           configuration-file: ./${{ env.COMPOSE_FILE }}
           images: ${{ needs.build-and-push.outputs.images }}
 
+      # HEAD pra ver código e cabeçalhos (descobre 401/302/503)
+      - name: Debug HTTP (/healthz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
+          echo "HEAD https://$HOST/healthz"
+          curl -skI "https://$HOST/healthz" || true
+
+      # Espera saudável (até 10 min, 5s entre tentativas)
       - name: Verificar saúde pós-deploy (/healthz)
         shell: bash
         run: |
           set -euo pipefail
           HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
           echo "Verificando https://$HOST/healthz"
-          for i in {1..24}; do
+          for i in {1..120}; do
             CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$HOST/healthz" || true)
             if [ "$CODE" = "200" ]; then
               echo "OK: $CODE"
