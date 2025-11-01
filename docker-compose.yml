@@ -2,23 +2,28 @@ version: "3.8"
 
 services:
   edge:
-    image: nginxdemos/hello
-    ports:
-      - "80:80"
+    image: nginx:alpine
+    ports: ["80:80"]
+    volumes:
+      - ./nginx-health.conf:/etc/nginx/conf.d/zzz-health.conf:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
 
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
+    image: docker.redpanda.com/redpandadata/redpanda:24.3.7
     command:
-      - redpanda start --smp 1 --memory 1G --overprovisioned --node-id 0
-      - --kafka-addr PLAINTEXT://0.0.0.0:29092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092
+      - redpanda
+      - start
+      - --smp; "1"
+      - --memory; 1G
+      - --overprovisioned
+      - --node-id; "0"
+      - --kafka-addr; PLAINTEXT://0.0.0.0:29092
+      - --advertise-kafka-addr; PLAINTEXT://redpanda:29092
     expose: ["29092","9644"]
-    # Persistência real no App Service = /home
     volumes:
       - /home/redpanda/data:/var/lib/redpanda/data
 
@@ -28,11 +33,11 @@ services:
     expose: ["8083"]
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'redpanda:29092'
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: redpanda:29092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8083
 
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     expose: ["6379"]
 
   redis-commander:
@@ -43,32 +48,28 @@ services:
       REDIS_HOSTS: local:redis:6379
 
   redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v2.6.1
     depends_on: [ redpanda ]
     expose: ["8080"]
     environment:
-      KAFKA_BROKERS: "redpanda:29092"
+      KAFKA_BROKERS: redpanda:29092
 
   mqtt-kafka-bridge:
-    build:
-      context: ./python-bridge
     image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
     restart: always
-    expose: ["8000"]
     depends_on: [ redpanda ]
+    expose: ["8000"]
     environment:
-      MQTT_BROKER: "broker.hivemq.com"
-      MQTT_PORT: 1883
-      KAFKA_BROKER: "redpanda:29092"
-      KAFKA_TOPIC: "iot-data"
+      MQTT_BROKER: broker.hivemq.com
+      MQTT_PORT: "1883"
+      KAFKA_BROKER: redpanda:29092
+      KAFKA_TOPIC: iot-data
 
   kafka-redis-consumer:
-    build:
-      context: ./kafka-redis-consumer
     image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
     restart: always
     depends_on: [ redpanda, redis ]
     environment:
-      KAFKA_BROKER: "redpanda:29092"
-      KAFKA_TOPIC: "iot-data"
-      REDIS_HOST: "redis"
+      KAFKA_BROKER: redpanda:29092
+      KAFKA_TOPIC: iot-data
+      REDIS_HOST: redis
