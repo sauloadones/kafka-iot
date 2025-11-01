@@ -1,70 +1,117 @@
-
-
 services:
+  # --- Edge (Nginx reverso + health) ---
   edge:
     build:
       context: .
       dockerfile: ops/edge/Dockerfile
-    ports: ["80:80"]
+    image: "${REGISTRY_PREFIX:-}edge:${IMAGE_TAG:-dev}"
+    # no App Service, WEBSITES_PORT=80
+    ports:
+      - "80:80"
+    depends_on:
+      - redpanda
+      - redpanda-console
+      - redis-commander
+      - schema-registry
 
+  # --- Kafka (Redpanda) ---
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:24.3.7
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: redpanda
+    # forma robusta (argv) para evitar parsing estranho:
     command:
       - redpanda
       - start
-      - --smp; "1"
-      - --memory; 1G
+      - --smp
+      - "1"
+      - --memory
+      - "1G"
       - --overprovisioned
-      - --node-id; "0"
-      - --kafka-addr; PLAINTEXT://0.0.0.0:29092
-      - --advertise-kafka-addr; PLAINTEXT://redpanda:29092
-    expose: ["29092","9644"]
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
     volumes:
-      - /home/redpanda/data:/var/lib/redpanda/data
+      - redpanda_data:/var/lib/redpanda/data
 
+  # --- Schema Registry ---
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
-    depends_on: [ redpanda ]
-    expose: ["8083"]
+    container_name: schema-registry
+    depends_on:
+      - redpanda
+    ports:
+      - "8081:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: redpanda:29092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8083
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'redpanda:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
 
+  # --- Redis ---
   redis:
-    image: redis:7-alpine
-    expose: ["6379"]
+    image: "redis:alpine"
+    container_name: redis
+    ports:
+      - "6379:6379"
 
+  # --- Redis Commander (GUI) ---
   redis-commander:
     image: rediscommander/redis-commander:latest
-    depends_on: [ redis ]
-    expose: ["8081"]
+    container_name: redis-commander
+    ports:
+      - "8082:8081"
+    depends_on:
+      - redis
     environment:
       REDIS_HOSTS: local:redis:6379
 
+  # --- Redpanda Console (GUI) ---
   redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:v2.6.1
-    depends_on: [ redpanda ]
-    expose: ["8080"]
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: redpanda-console
+    depends_on:
+      - redpanda
+    ports:
+      - "8080:8080"
     environment:
-      KAFKA_BROKERS: redpanda:29092
+      KAFKA_BROKERS: "redpanda:29092"
 
+  # --- Python Bridge MQTT → Kafka ---
   mqtt-kafka-bridge:
-    image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
+    build:
+      context: ./python-bridge
+    image: "${REGISTRY_PREFIX:-}mqtt-kafka-bridge:${IMAGE_TAG:-dev}"
+    container_name: mqtt-kafka-bridge
     restart: always
-    depends_on: [ redpanda ]
-    expose: ["8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redpanda
     environment:
-      MQTT_BROKER: broker.hivemq.com
-      MQTT_PORT: "1883"
-      KAFKA_BROKER: redpanda:29092
-      KAFKA_TOPIC: iot-data
+      MQTT_BROKER: "broker.hivemq.com"
+      MQTT_PORT: 1883
+      KAFKA_BROKER: "redpanda:29092"
+      KAFKA_TOPIC: "iot-data"
 
+  # --- Consumer Kafka → Redis ---
   kafka-redis-consumer:
-    image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
+    build:
+      context: ./kafka-redis-consumer
+    image: "${REGISTRY:-}/kafka-redis-consumer:${IMAGE_TAG:-dev}"
+    container_name: kafka-redis-consumer
     restart: always
-    depends_on: [ redpanda, redis ]
+    depends_on:
+      - redpanda
+      - redis
     environment:
-      KAFKA_BROKER: redpanda:29092
-      KAFKA_TOPIC: iot-data
-      REDIS_HOST: redis
+      KAFKA_BROKER: "redpanda:29092"
+      KAFKA_TOPIC: "iot-data"
+      REDIS_HOST: "redis"
+
+volumes:
+  redpanda_data:

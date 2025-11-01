@@ -1,7 +1,7 @@
 name: CI/CD — App Service (docker-compose, credenciais ACR)
 
 on:
-  push: { branches: [ "main" ] }
+  push: { branches: ["main"] }
   workflow_dispatch:
 
 permissions:
@@ -24,22 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login (service principal secret)
+      - name: Azure login (service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Login no ACR (para push)
+      - name: Login no ACR
         run: az acr login -n "$ACR_NAME"
 
-      - name: Build & Push (somente serviços privados que existirem no compose)
+      - name: Build & Push (serviços privados)
         shell: bash
         run: |
           set -euo pipefail
           export REGISTRY="${{ env.REGISTRY }}"
+          export REGISTRY_PREFIX="${REGISTRY}/"
           export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+
           PRESENT=$(docker compose -f "${COMPOSE_FILE}" config --services)
           for s in $PRIVATE_SERVICES; do
             if echo "$PRESENT" | grep -qx "$s"; then
@@ -57,6 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           export REGISTRY="${{ env.REGISTRY }}"
+          export REGISTRY_PREFIX="${REGISTRY}/"
           export IMAGE_TAG="${{ env.IMAGE_TAG }}"
           docker compose -f "${COMPOSE_FILE}" config \
             | awk '/image:/ {print $2}' \
@@ -75,70 +78,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login (service principal secret)
+      - name: Azure login (service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # App Settings só com credenciais do ACR (sem WEBSITES_PORT)
-      - name: Configurar credenciais do registro no App Service
+      - name: Configurar App Settings (ACR + porta + warmup)
         shell: bash
         run: |
           set -euo pipefail
           az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --settings \
-            DOCKER_REGISTRY_SERVER_URL="https://${REGISTRY}" \
+            DOCKER_REGISTRY_SERVER_URL="https://${{ env.REGISTRY }}" \
             DOCKER_REGISTRY_SERVER_USERNAME="${{ secrets.ACR_USERNAME }}" \
             DOCKER_REGISTRY_SERVER_PASSWORD="${{ secrets.ACR_PASSWORD }}" \
-            WEBSITES_ENABLE_APP_SERVICE_STORAGE=true >/dev/null
+            WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+            WEBSITES_PORT=80 \
+            WEBSITES_CONTAINER_START_TIME_LIMIT=240 >/dev/null
 
-      # Health check e Always On no recurso (App Service vai tirar instância do LB se /healthz != 200)
-      - name: Ajustar Health Check e Always On (compatível com qualquer CLI)
-        shell: bash
-        run: |
-            set -euo pipefail
-            # tenta via webapp update (se a CLI suportar)
-            if ! az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-                --set siteConfig.alwaysOn=true siteConfig.healthCheckPath="/healthz" >/dev/null 2>&1; then
-              # fallback genérico
-              az resource update -g "$RESOURCE_GROUP" \
-                --resource-type "Microsoft.Web/sites/config" \
-                -n "${WEBAPP_NAME}/web" \
-                --set properties.alwaysOn=true properties.healthCheckPath="/healthz" >/dev/null
-            fi
-            # conferir
-            az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-              --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}"
-      - name: Deploy docker-compose ao App Service
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: ${{ env.WEBAPP_NAME }}
-          configuration-file: ./${{ env.COMPOSE_FILE }}
-          images: ${{ needs.build-and-push.outputs.images }}
-
-      # HEAD pra ver código e cabeçalhos (descobre 401/302/503)
-      - name: Debug HTTP (/healthz)
+      - name: Ajustar Health Check (/healthz) e Always On
         shell: bash
         run: |
           set -euo pipefail
-          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
-          echo "HEAD https://$HOST/healthz"
-          curl -skI "https://$HOST/healthz" || true
-
-      # Espera saudável (até 10 min, 5s entre tentativas)
-      - name: Verificar saúde pós-deploy (/healthz)
-        shell: bash
-        run: |
-          set -euo pipefail
-          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
-          echo "Verificando https://$HOST/healthz"
-          for i in {1..120}; do
-            CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$HOST/healthz" || true)
-            if [ "$CODE" = "200" ]; then
-              echo "OK: $CODE"
-              exit 0
-            fi
-            echo "Aguardando... (status=$CODE)"
-            sleep 5
-          done
-          echo "Falha: healthcheck não respondeu 200."
-          exit 1
+          if ! az webapp update
