@@ -120,6 +120,21 @@ jobs:
           configuration-file: ./${{ env.COMPOSE_FILE }}
           images: ${{ needs.build-and-push.outputs.images }}
 
+      - name: Dump App Settings (porta e health)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --query "[?name=='WEBSITES_PORT' || name=='WEBSITES_CONTAINER_START_TIME_LIMIT']" -o table
+          az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}" -o table
+
+      - name: Mostrar container/compose aplicados
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp config container show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" -o json
+
       - name: Debug HTTP (/healthz)
         shell: bash
         run: |
