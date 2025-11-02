@@ -1,8 +1,8 @@
-version: "3.8"
+﻿version: "3.8"
 
 services:
   edge:
-    image: ${REGISTRY}/edge:${IMAGE_TAG}
+    image: iotkafka.azurecr.io/edge:fix-502
     ports: ["80:80"]  # único endpoint público
     depends_on:
       - redpanda
@@ -26,17 +26,15 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: redpanda:29092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-      
 
   redis:
     image: redis:alpine
-    
+
   redis-commander:
     image: rediscommander/redis-commander:latest
     depends_on: [ redis ]
     environment:
       REDIS_HOSTS: local:redis:6379
-      URL_PREFIX: /redis
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
@@ -44,12 +42,9 @@ services:
     environment:
       KAFKA_BROKERS: redpanda:29092
       SCHEMAREGISTRY_URL: http://schema-registry:8081
-      URL_PREFIX: /console
-      SERVER_STRIPPREFIX: "true"
-
-
+      
   mqtt-kafka-bridge:
-    image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
+    image: iotkafka.azurecr.io/mqtt-kafka-bridge:02a6df22129d4ca5ccf882fd540f8c887af5f962
     restart: always
     depends_on: [ redpanda ]
     environment:
@@ -59,10 +54,11 @@ services:
       KAFKA_TOPIC: iot-data
 
   kafka-redis-consumer:
-    image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
+    image: iotkafka.azurecr.io/kafka-redis-consumer:02a6df22129d4ca5ccf882fd540f8c887af5f962
     restart: always
     depends_on: [ redpanda, redis ]
     environment:
       KAFKA_BROKER: redpanda:29092
       KAFKA_TOPIC: iot-data
       REDIS_HOST: redis
+
