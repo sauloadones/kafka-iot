@@ -1,18 +1,28 @@
-version: "3.8"
+
+
 services:
   edge:
     image: iotkafka.azurecr.io/edge:live
     restart: always
-    depends_on: [redpanda, schema-registry, redpanda-console, redis, redis-commander, mqtt-kafka-bridge, kafka-redis-consumer]
+    depends_on:
+      - redpanda
+      - schema-registry
+      - redpanda-console
+      - redis
+      - redis-commander
+      - mqtt-kafka-bridge
+      - kafka-redis-consumer
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
     restart: always
     command: >
       redpanda start --smp 1 --memory 1G --overprovisioned
-      --node-id 0 --kafka-addr PLAINTEXT://0.0.0.0:29092
+      --node-id 0
+      --kafka-addr PLAINTEXT://0.0.0.0:29092
       --advertise-kafka-addr PLAINTEXT://redpanda:29092
-    expose: ["29092"]
+    expose:
+      - "29092"
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
@@ -21,31 +31,48 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://redpanda:29092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-    expose: ["8081"]
-    depends_on: [redpanda]
+    expose:
+      - "8081"
+    depends_on:
+      - redpanda
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
     restart: always
     environment:
       KAFKA_BROKERS: redpanda:29092
-    expose: ["8080"]
-    depends_on: [redpanda]
+    expose:
+      - "8080"
+    depends_on:
+      - redpanda
 
+  # Redis com RedisJSON (evita "unknown command JSON.*")
   redis:
-    image: redis:alpine
+    image: redis/redis-stack-server:7.4.0-v2
     restart: always
     command: ["redis-server","--appendonly","yes"]
-    expose: ["6379"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
+  # UI do Redis em /redis/ (usa URL_PREFIX)
   redis-commander:
     image: rediscommander/redis-commander:latest
     restart: always
     environment:
       PORT: "8081"
       REDIS_HOSTS: "local:redis:6379"
-    expose: ["8081"]
-    depends_on: [redis]
+      URL_PREFIX: "/redis"
+      # HTTP_USER: "admin"
+      # HTTP_PASSWORD: "uma-senha-forte"
+    expose:
+      - "8081"
+    depends_on:
+      - redis
 
   mqtt-kafka-bridge:
     image: iotkafka.azurecr.io/mqtt-kafka-bridge:live
@@ -55,23 +82,37 @@ services:
       uvicorn app.main:app --host 0.0.0.0 --port 8000
       --root-path /api --proxy-headers --forwarded-allow-ips="*"
     environment:
+      # dê todas as opções para evitar defaults de localhost
       KAFKA_BOOTSTRAP: redpanda:29092
+      KAFKA_BROKERS: redpanda:29092
+      BOOTSTRAP_SERVERS: redpanda:29092
+      KAFKA_URL: redpanda:29092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       PYTHONUNBUFFERED: "1"
-    expose: ["8000"]
-    depends_on: [redpanda, schema-registry, redis]
+    expose:
+      - "8000"
+    depends_on:
+      - redpanda
+      - schema-registry
+      - redis
 
   kafka-redis-consumer:
     image: iotkafka.azurecr.io/kafka-redis-consumer:live
     restart: always
     environment:
+      # idem aqui para não cair em localhost:9092
       KAFKA_BOOTSTRAP: redpanda:29092
+      KAFKA_BROKERS: redpanda:29092
+      BOOTSTRAP_SERVERS: redpanda:29092
+      KAFKA_URL: redpanda:29092
       GROUP_ID: kafka-redis-consumer-group
       SESSION_TIMEOUT_MS: "30000"
       HEARTBEAT_INTERVAL_MS: "10000"
       TOPIC: iot-data
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-    depends_on: [redpanda, redis]
+    depends_on:
+      - redpanda
+      - redis
