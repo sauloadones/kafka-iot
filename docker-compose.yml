@@ -20,7 +20,7 @@ services:
       - --advertise-kafka-addr
       - PLAINTEXT://redpanda:29092
     ports:
-      - "9092:9092"
+      - "29092:29092"
       - "9644:9644"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
@@ -65,7 +65,7 @@ services:
       KAFKA_BROKERS: "redpanda:29092"
 
   mqtt-kafka-bridge:
-    image: __ACR_LOGIN__/mqtt-kafka-bridge:latest
+    image: iotkafkaacrwtvgek.azurecr.io/mqtt-kafka-bridge:latest
     container_name: mqtt-kafka-bridge
     restart: always
     ports:
@@ -78,7 +78,7 @@ services:
       KAFKA_TOPIC: "iot-data"
 
   kafka-redis-consumer:
-    image: __ACR_LOGIN__/kafka-redis-consumer:latest
+    image: iotkafkaacrwtvgek.azurecr.io/kafka-redis-consumer:latest
     container_name: kafka-redis-consumer
     restart: always
     depends_on: [ redpanda, redis ]
@@ -94,11 +94,9 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: >
-      --interval 60
-      --cleanup
-      mqtt-kafka-bridge
-      kafka-redis-consumer
+      - /home/azureuser/.docker/config.json:/config.json:ro   # <= ajuste o usuário se for outro
+    command: --interval 60 --cleanup mqtt-kafka-bridge kafka-redis-consumer
+
 
 volumes:
   redpanda_data:

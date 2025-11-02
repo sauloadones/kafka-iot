@@ -1,19 +1,13 @@
-name: CI - Build (ACR Tasks)
+name: CI — Build & Push ACR (Watchtower mode)
 
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: {}
-
-permissions:
-  id-token: write
-  contents: read
 
 env:
-  ACR_NAME:           ${{ vars.ACR_NAME }}            # ex: arturiotacr
-  AZ_SUBSCRIPTION_ID: ${{ vars.AZ_SUBSCRIPTION_ID }}
-  AZ_TENANT_ID:       ${{ vars.AZ_TENANT_ID }}
-  AZ_CLIENT_ID:       ${{ vars.AZ_CLIENT_ID }}
+  ACR_LOGIN: ${{ secrets.ACR_LOGIN }}
+  IMG1: mqtt-kafka-bridge
+  IMG2: kafka-redis-consumer
 
 jobs:
   build:
@@ -21,24 +15,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
+      - name: Login no ACR
+        uses: docker/login-action@v3
         with:
-          client-id:       ${{ env.AZ_CLIENT_ID }}
-          tenant-id:       ${{ env.AZ_TENANT_ID }}
-          subscription-id: ${{ env.AZ_SUBSCRIPTION_ID }}
+          registry: ${{ env.ACR_LOGIN }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-      # builda DENTRO do ACR (rápido e limpo). Marque latest + SHA.
-      - name: Build mqtt-kafka-bridge
-        run: |
-          az acr build -r "$ACR_NAME" \
-            -t mqtt-kafka-bridge:latest \
-            -t mqtt-kafka-bridge:${{ github.sha }} \
-            ./python-bridge
+      - name: Build+Push mqtt-kafka-bridge
+        uses: docker/build-push-action@v6
+        with:
+          context: ./python-bridge
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN }}/${{ env.IMG1 }}:latest
+            ${{ env.ACR_LOGIN }}/${{ env.IMG1 }}:${{ github.sha }}
 
-      - name: Build kafka-redis-consumer
-        run: |
-          az acr build -r "$ACR_NAME" \
-            -t kafka-redis-consumer:latest \
-            -t kafka-redis-consumer:${{ github.sha }} \
-            ./kafka-redis-consumer
+      - name: Build+Push kafka-redis-consumer
+        uses: docker/build-push-action@v6
+        with:
+          context: ./kafka-redis-consumer
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN }}/${{ env.IMG2 }}:latest
+            ${{ env.ACR_LOGIN }}/${{ env.IMG2 }}:${{ github.sha }}
