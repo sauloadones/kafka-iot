@@ -1,102 +1,73 @@
-version: "3.9"
-
 services:
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
-    container_name: redpanda
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
     restart: unless-stopped
     command:
-      - redpanda
-      - start
-      - --smp
-      - "1"
-      - --memory
-      - 1G
-      - --overprovisioned
-      - --node-id
-      - "0"
-      - --kafka-addr
-      - PLAINTEXT://0.0.0.0:29092
-      - --advertise-kafka-addr
-      - PLAINTEXT://redpanda:29092
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Let's Encrypt (HTTP-01)
+      - --certificatesresolvers.le.acme.email=seu-email@exemplo.com
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      # redirecionar http->https
+      - --api.dashboard=false
     ports:
-      - "29092:29092"
-      - "9644:9644"
+      - "80:80"
+      - "443:443"
     volumes:
-      - redpanda_data:/var/lib/redpanda/data
-
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.5.0
-    container_name: schema-registry
-    restart: unless-stopped
-    depends_on: [ redpanda ]
-    ports:
-      - "8081:8081"
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "redpanda:29092"
-      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    # Em produção, evite expor publicamente:
-    # ports: [ "6379:6379" ]
-
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: redis-commander
-    restart: unless-stopped
-    depends_on: [ redis ]
-    ports:
-      - "8082:8081"
-    environment:
-      REDIS_HOSTS: "local:redis:6379"
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
 
   redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:latest
-    container_name: redpanda-console
-    restart: unless-stopped
-    depends_on: [ redpanda ]
-    ports:
-      - "8080:8080"
-    environment:
-      KAFKA_BROKERS: "redpanda:29092"
+    # image: docker.redpanda.com/redpandadata/console:v2.7.2
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.console.rule=Host(`console.SEUSUB.nip.io`)
+      - traefik.http.routers.console.entrypoints=websecure
+      - traefik.http.routers.console.tls.certresolver=le
+      - traefik.http.services.console.loadbalancer.server.port=8080
+      - traefik.http.routers.console-redirect.rule=Host(`console.SEUSUB.nip.io`)
+      - traefik.http.routers.console-redirect.entrypoints=web
+      - traefik.http.routers.console-redirect.middlewares=redir
+      - traefik.http.middlewares.redir.redirectscheme.scheme=https
+
+  redis-commander:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.redis.rule=Host(`redis.SEUSUB.nip.io`)
+      - traefik.http.routers.redis.entrypoints=websecure
+      - traefik.http.routers.redis.tls.certresolver=le
+      - traefik.http.services.redis.loadbalancer.server.port=8081
+      - traefik.http.routers.redis-redirect.rule=Host(`redis.SEUSUB.nip.io`)
+      - traefik.http.routers.redis-redirect.entrypoints=web
+      - traefik.http.routers.redis-redirect.middlewares=redir
+
+  schema-registry:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.schema.rule=Host(`schema.SEUSUB.nip.io`)
+      - traefik.http.routers.schema.entrypoints=websecure
+      - traefik.http.routers.schema.tls.certresolver=le
+      - traefik.http.services.schema.loadbalancer.server.port=8081
+      - traefik.http.routers.schema-redirect.rule=Host(`schema.SEUSUB.nip.io`)
+      - traefik.http.routers.schema-redirect.entrypoints=web
+      - traefik.http.routers.schema-redirect.middlewares=redir
 
   mqtt-kafka-bridge:
-    image: iotkafkaacrwtvgek.azurecr.io/mqtt-kafka-bridge:latest
-    container_name: mqtt-kafka-bridge
-    restart: always
-    ports:
-      - "8000:8000"
-    depends_on: [ redpanda ]
-    environment:
-      MQTT_BROKER: "broker.hivemq.com"
-      MQTT_PORT: 1883
-      KAFKA_BROKER: "redpanda:29092"
-      KAFKA_TOPIC: "iot-data"
-
-  kafka-redis-consumer:
-    image: iotkafkaacrwtvgek.azurecr.io/kafka-redis-consumer:latest
-    container_name: kafka-redis-consumer
-    restart: always
-    depends_on: [ redpanda, redis ]
-    environment:
-      KAFKA_BROKER: "redpanda:29092"
-      KAFKA_TOPIC: "iot-data"
-      REDIS_HOST: "redis"
-
-  # Watchtower — olha somente suas imagens privadas do ACR
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /home/azureuser/.docker/config.json:/config.json:ro   # <= ajuste o usuário se for outro
-    command: --interval 60 --cleanup mqtt-kafka-bridge kafka-redis-consumer
-
+    # garanta que sua app escute em 0.0.0.0:8000
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.bridge.rule=Host(`bridge.SEUSUB.nip.io`)
+      - traefik.http.routers.bridge.entrypoints=websecure
+      - traefik.http.routers.bridge.tls.certresolver=le
+      - traefik.http.services.bridge.loadbalancer.server.port=8000
+      - traefik.http.routers.bridge-redirect.rule=Host(`bridge.SEUSUB.nip.io`)
+      - traefik.http.routers.bridge-redirect.entrypoints=web
+      - traefik.http.routers.bridge-redirect.middlewares=redir
 
 volumes:
-  redpanda_data:
+  traefik_letsencrypt:
