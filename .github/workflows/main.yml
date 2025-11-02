@@ -1,26 +1,36 @@
-name: CI/CD — App Service (docker-compose, credenciais ACR)
+name: CI/CD — App Service (docker-compose + ACR + MI)
 
 on:
-  push: { branches: ["main"] }
+  push:
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 env:
-  ACR_NAME:        ${{ vars.ACR_NAME }}
-  REGISTRY:        ${{ vars.ACR_NAME }}.azurecr.io
-  RESOURCE_GROUP:  ${{ vars.AZ_RESOURCE_GROUP }}
-  WEBAPP_NAME:     ${{ vars.AZ_WEBAPP_NAME }}
+  # ===== variáveis de ambiente (Configurar em Settings > Variables) =====
+  ACR_NAME:        ${{ vars.ACR_NAME }}             # ex.: iotkafka
+  REGISTRY:        ${{ vars.ACR_NAME }}.azurecr.io  # ex.: iotkafka.azurecr.io
+  RESOURCE_GROUP:  ${{ vars.AZ_RESOURCE_GROUP }}    # ex.: iotstack-esus2-rg
+  WEBAPP_NAME:     ${{ vars.AZ_WEBAPP_NAME }}       # ex.: iotkafka
+
+  # Compose local (com build:) e compose para Azure (só image:)
   COMPOSE_FILE:    docker-compose.yml
+  AZURE_COMPOSE_FILE: docker-compose.azure.yml
+
+  # Tag padrão = SHA do commit (mesma tag para todas as imagens privadas)
   IMAGE_TAG:       ${{ github.sha }}
-  PRIVATE_SERVICES: "mqtt-kafka-bridge kafka-redis-consumer edge"
+
+  # Lista dos serviços privados que você constrói e publica no ACR
+  PRIVATE_SERVICES: "edge mqtt-kafka-bridge kafka-redis-consumer"
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      images: ${{ steps.images.outputs.list }}
+      tag:   ${{ steps.out.outputs.tag }}
+      imgs:  ${{ steps.out.outputs.imgs }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,42 +44,50 @@ jobs:
       - name: Login no ACR
         run: az acr login -n "$ACR_NAME"
 
+      # Buildx explícito (produção): constrói e envia cada serviço privado ao ACR com a MESMA tag
       - name: Build & Push (serviços privados)
         shell: bash
         run: |
           set -euo pipefail
-          export REGISTRY="${{ env.REGISTRY }}"
-          export REGISTRY_PREFIX="${REGISTRY}/"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          IMAGE_TAG="${{ env.IMAGE_TAG }}"
 
-          PRESENT=$(docker compose -f "${COMPOSE_FILE}" config --services)
-          for s in $PRIVATE_SERVICES; do
-            if echo "$PRESENT" | grep -qx "$s"; then
-              echo ">> build/push: $s"
-              docker compose -f "${COMPOSE_FILE}" build "$s"
-              docker compose -f "${COMPOSE_FILE}" push  "$s"
-            else
-              echo ">> skip: $s (não está no compose)"
+          # === mapeia diretórios corretos ===
+          declare -A CTX
+          CTX["edge"]="ops/edge"
+          CTX["mqtt-kafka-bridge"]="python-bridge"
+          CTX["kafka-redis-consumer"]="kafka-redis-consumer"
+
+          for s in ${{ env.PRIVATE_SERVICES }}; do
+            ctx="${CTX[$s]:-$s}"
+            if [ ! -d "$ctx" ]; then
+              echo "::error::Diretório de build não encontrado para '$s' em '$ctx'"; exit 1
             fi
+            echo ">> buildx $s  ->  $REGISTRY/$s:$IMAGE_TAG  (contexto: $ctx)"
+            docker buildx build --platform linux/amd64 \
+              -t "$REGISTRY/$s:$IMAGE_TAG" \
+              --push "$ctx"
           done
 
-      - name: Resolver imagens do compose (expand env)
-        id: images
+      # Verifica que as tags existem no ACR (evita 503 por tag inexistente)
+      - name: Verificar tags no ACR (edge/mqtt-bridge/kafka-consumer)
         shell: bash
         run: |
           set -euo pipefail
-          export REGISTRY="${{ env.REGISTRY }}"
-          export REGISTRY_PREFIX="${REGISTRY}/"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          for r in edge mqtt-kafka-bridge kafka-redis-consumer; do
+            if ! az acr repository show-tags -n "$ACR_NAME" --repository "$r" --query "[?@=='${{ env.IMAGE_TAG }}']" -o tsv | grep -q .; then
+              echo "::error::Tag ${{ env.IMAGE_TAG }} ausente no ACR para $r"; exit 1
+            fi
+          done
 
-          docker compose -f "${COMPOSE_FILE}" config \
-            | awk '/image:/ {print $2}' \
-            | tr -d "\"'" > images.txt
-
-          { echo 'list<<EOF'; cat images.txt; echo 'EOF'; } >> "$GITHUB_OUTPUT"
-
-          echo "==== Imagens detectadas ===="
-          cat images.txt
+      - name: Emitir saídas
+        id: out
+        shell: bash
+        run: |
+          echo "tag=${{ env.IMAGE_TAG }}" >> "$GITHUB_OUTPUT"
+          printf "imgs=%s\n" "$(printf '%s ' ${{ env.REGISTRY }}/edge:${{ env.IMAGE_TAG }} \
+                                          ${{ env.REGISTRY }}/mqtt-kafka-bridge:${{ env.IMAGE_TAG }} \
+                                          ${{ env.REGISTRY }}/kafka-redis-consumer:${{ env.IMAGE_TAG }})" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build-and-push
@@ -82,66 +100,74 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configurar App Settings (ACR + porta + warmup)
+      # Usa Managed Identity do WebApp para puxar do ACR (AcrPull) — sem DOCKER_* secrets
+      - name: Conceder AcrPull à Managed Identity e ativar MI no WebApp
+        shell: bash
+        run: |
+          set -euo pipefail
+          MI=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query identity.principalId -o tsv)
+          ACR_ID=$(az acr show -n "$ACR_NAME" --query id -o tsv)
+          az role assignment create --assignee-object-id "$MI" --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID" || true
+          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --set siteConfig.acrUseManagedIdentityCreds=true
+
+      - name: App Settings (porta, storage, tempo de start)
         shell: bash
         run: |
           set -euo pipefail
           az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --settings \
-            DOCKER_REGISTRY_SERVER_URL="https://${{ env.REGISTRY }}" \
-            DOCKER_REGISTRY_SERVER_USERNAME="${{ secrets.ACR_USERNAME }}" \
-            DOCKER_REGISTRY_SERVER_PASSWORD="${{ secrets.ACR_PASSWORD }}" \
             WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
             WEBSITES_PORT=80 \
-            WEBSITES_CONTAINER_START_TIME_LIMIT=240 >/dev/null
+            WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
+            WEBSITES_HEALTHCHECK_PATH=/healthz >/dev/null
 
-      # tenta via webapp update; se não rolar, aplica fallback com az resource update
-      - name: Health Check e Always On (tentativa direta)
+      - name: Health Check e Always On (forçar)
         shell: bash
         run: |
           set -euo pipefail
           az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
             --set siteConfig.alwaysOn=true siteConfig.healthCheckPath="/healthz" || true
-
-      - name: Health Check e Always On (fallback)
-        shell: bash
-        run: |
-          set -euo pipefail
           az resource update -g "$RESOURCE_GROUP" \
             --resource-type "Microsoft.Web/sites/config" \
             -n "${WEBAPP_NAME}/web" \
             --set properties.alwaysOn=true properties.healthCheckPath="/healthz" || true
           az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}"
-      - name: Gerar compose final p/ Azure (expande variáveis)
+            --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}" -o table
+
+      - name: Instalar envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+
+      - name: Gerar compose final p/ Azure (expand REGISTRY/IMAGE_TAG)
         shell: bash
         run: |
           set -euo pipefail
           export REGISTRY="${{ env.REGISTRY }}"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
-          envsubst < docker-compose.azure.yml > docker-compose.final.yml
+          export IMAGE_TAG="${{ needs.build-and-push.outputs.tag }}"
+          if [ ! -f "${{ env.AZURE_COMPOSE_FILE }}" ]; then
+            echo "::error::Arquivo ${{ env.AZURE_COMPOSE_FILE }} não encontrado"; exit 1
+          fi
+          envsubst < "${{ env.AZURE_COMPOSE_FILE }}" > docker-compose.final.yml
           echo "==== docker-compose.final.yml ===="
           cat docker-compose.final.yml
 
+      # Publica o docker-compose.final.yml no App Service
       - name: Deploy docker-compose ao App Service
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ env.WEBAPP_NAME }}
-          configuration-file: ./docker-compose.final.yml  
+          configuration-file: ./docker-compose.final.yml
+
+      - name: Conferir linuxFxVersion (compose aplicado)
+        shell: bash
+        run: az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query siteConfig.linuxFxVersion -o tsv
 
       - name: Dump App Settings (porta e health)
         shell: bash
         run: |
           set -euo pipefail
           az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --query "[?name=='WEBSITES_PORT' || name=='WEBSITES_CONTAINER_START_TIME_LIMIT']" -o table
+            --query "[?name=='WEBSITES_PORT' || name=='WEBSITES_CONTAINER_START_TIME_LIMIT' || name=='WEBSITES_HEALTHCHECK_PATH']" -o table
           az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
             --query "siteConfig.{alwaysOn:alwaysOn,healthCheckPath:healthCheckPath}" -o table
-
-      - name: Mostrar container/compose aplicados
-        shell: bash
-        run: |
-          set -euo pipefail
-          az webapp config container show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" -o json
 
       - name: Debug HTTP (/healthz)
         shell: bash
@@ -163,8 +189,18 @@ jobs:
               echo "OK: $CODE"
               exit 0
             fi
-            echo "Aguardando... (status=$CODE)"
-            sleep 5
+            echo "Aguardando... (status=$CODE)"; sleep 5
           done
-          echo "Falha: healthcheck não respondeu 2xx/3xx."
-          exit 1
+          echo "Falha: healthcheck não respondeu 2xx/3xx."; exit 1
+
+      # Paraquedas: se o health gate falhar, tenta apontar temporariamente para "/" e mostra status
+      - name: Fallback temporário de health (/) se falhar
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --set siteConfig.healthCheckPath="/"
+          sleep 10
+          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
+          echo "HEAD https://$HOST/"
+          curl -skI "https://$HOST/" || true
