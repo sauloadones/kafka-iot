@@ -1,0 +1,21 @@
+services:
+  edge:
+    image: iotkafka.azurecr.io/edge:live
+    # ... resto igual
+  mqtt-kafka-bridge:
+    image: iotkafka.azurecr.io/mqtt-kafka-bridge:live
+    # ...
+  kafka-redis-consumer:
+    image: iotkafka.azurecr.io/kafka-redis-consumer:live
+    # ...
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+  redis:
+    image: redis:alpine
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
