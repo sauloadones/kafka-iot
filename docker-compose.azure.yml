@@ -54,15 +54,12 @@ services:
     image: ${REGISTRY}/mqtt-kafka-bridge:${IMAGE_TAG}
     restart: always
     depends_on: [ redpanda ]
+    command: ["uvicorn","main:app","--host","0.0.0.0","--port","8000","--root-path","/api","--proxy-headers","--forwarded-allow-ips","*"]
     environment:
       MQTT_BROKER: broker.hivemq.com
       MQTT_PORT: "1883"
       KAFKA_BROKER: redpanda:29092
       KAFKA_TOPIC: iot-data
-      # >>> Para FastAPI/Uvicorn atrás de /api
-      UVICORN_HOST: "0.0.0.0"
-      UVICORN_PORT: "8000"
-      UVICORN_CMD_ARGS: "--root-path /api --proxy-headers --forwarded-allow-ips=*"
   
   kafka-redis-consumer:
     image: ${REGISTRY}/kafka-redis-consumer:${IMAGE_TAG}
