@@ -1,21 +1,115 @@
+version: "3.8"
+
 services:
+  # =============== Reverse proxy (sua imagem Nginx "edge") ===============
   edge:
     image: iotkafka.azurecr.io/edge:live
-    # ... resto igual
-  mqtt-kafka-bridge:
-    image: iotkafka.azurecr.io/mqtt-kafka-bridge:live
-    # ...
-  kafka-redis-consumer:
-    image: iotkafka.azurecr.io/kafka-redis-consumer:live
-    # ...
+    restart: always
+    # No App Service, NÃO mapeie portas; apenas garanta que o edge ouça na 80.
+    # O front do App Service encaminha para a porta interna 80 (WEBSITES_PORT=80).
+    depends_on:
+      - redpanda
+      - schema-registry
+      - redpanda-console
+      - redis
+      - redis-commander
+      - mqtt-kafka-bridge
+      - kafka-redis-consumer
+    # Se precisar persistir algo (logs do Nginx), pode usar /home:
+    # volumes:
+    #   - /home/edge-logs:/var/log/nginx
 
+  # ======================== Kafka via Redpanda ============================
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
+    restart: always
+    command: >
+      redpanda start --smp 1 --memory 1G --overprovisioned
+      --node-id 0
+      --kafka-addr PLAINTEXT://0.0.0.0:29092
+      --advertise-kafka-addr PLAINTEXT://redpanda:29092
+    expose:
+      - "29092"
+
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
-  redis:
-    image: redis:alpine
-  redis-commander:
-    image: rediscommander/redis-commander:latest
+    restart: always
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://redpanda:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+    expose:
+      - "8081"
+    depends_on:
+      - redpanda
+
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
+    restart: always
+    environment:
+      # Endereço interno do broker
+      KAFKA_BROKERS: redpanda:29092
+      # Se quiser guardar a config/estado, monte /data em /home/console-data
+      # CONFIG_FILE: /etc/console/config.yaml
+    expose:
+      - "8080"
+    depends_on:
+      - redpanda
+
+  # ============================ Redis stack ===============================
+  redis:
+    image: redis:alpine
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    # volumes:
+    #   - /home/redis-data:/data
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    restart: always
+    environment:
+      PORT: "8081"
+      REDIS_HOSTS: "local:redis:6379"
+      # Prefixo /redis é tratado pelo Nginx via X-Forwarded-Prefix
+    expose:
+      - "8081"
+    depends_on:
+      - redis
+
+  # ======================= Serviços da sua aplicação ======================
+  mqtt-kafka-bridge:
+    image: iotkafka.azurecr.io/mqtt-kafka-bridge:live
+    restart: always
+    working_dir: /app
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      --root-path /api --proxy-headers --forwarded-allow-ips="*"
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      PYTHONUNBUFFERED: "1"
+    expose:
+      - "8000"
+    depends_on:
+      - redpanda
+      - schema-registry
+      - redis
+
+  kafka-redis-consumer:
+    image: iotkafka.azurecr.io/kafka-redis-consumer:live
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:29092
+      GROUP_ID: kafka-redis-consumer-group
+      SESSION_TIMEOUT_MS: "30000"
+      HEARTBEAT_INTERVAL_MS: "10000"
+      TOPIC: iot-data
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - redpanda
+      - redis
