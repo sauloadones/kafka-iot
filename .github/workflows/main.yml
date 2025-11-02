@@ -1,4 +1,4 @@
-name: CI/CD — App Service (Blue/Green slots, compose único)
+name: CI/CD — App Service (compose + Managed Identity + :live)
 
 on:
   push:
@@ -22,7 +22,7 @@ env:
   # Imutável por commit
   IMAGE_TAG:       ${{ github.sha }}
 
-  # Compose único no repositório (aponta para QUALQUER tag; será patchado em memória)
+  # Compose único (no repo) — aponta para :live nas imagens privadas
   COMPOSE_FILE:    docker-compose.yml
 
   # Serviços privados hospedados no ACR (os que você builda)
@@ -55,7 +55,7 @@ jobs:
           REG="${REGISTRY}"
           TAG="${IMAGE_TAG}"
 
-          # ajuste estes caminhos para o layout real do seu repo
+          # ajuste estes caminhos para o layout real do seu repo:
           declare -A CTX=(
             ["edge"]="ops/edge"
             ["mqtt-kafka-bridge"]="python-bridge"
@@ -96,161 +96,74 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Criar slot 'staging' (se não existir)
-        run: |
-          az webapp deployment slot create -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging \
-            --configuration-source "$WEBAPP_NAME" >/dev/null 2>&1 || true
-
-      - name: Ativar Managed Identity e AcrPull (produção e staging)
+      - name: Ativar Managed Identity e conceder AcrPull
         shell: bash
         run: |
           set -euo pipefail
-          # Prod
           az webapp identity assign -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" >/dev/null 2>&1 || true
-          MI_PROD=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query identity.principalId -o tsv)
-
-          # Staging
-          az webapp identity assign -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging >/dev/null 2>&1 || true
-          MI_STG=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging --query identity.principalId -o tsv)
-
+          MI=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query identity.principalId -o tsv)
           ACR_ID=$(az acr show -n "$ACR_NAME" --query id -o tsv)
-          for MI in "$MI_PROD" "$MI_STG"; do
-            az role assignment create --assignee-object-id "$MI" \
-              --assignee-principal-type ServicePrincipal --role AcrPull \
-              --scope "$ACR_ID" >/dev/null 2>&1 || true
-          done
 
-          # Usar MI para pull
+          az role assignment create \
+            --assignee-object-id "$MI" \
+            --assignee-principal-type ServicePrincipal \
+            --role AcrPull \
+            --scope "$ACR_ID" >/dev/null 2>&1 || true
+
           az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --set siteConfig.acrUseManagedIdentityCreds=true >/dev/null
-          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging \
             --set siteConfig.acrUseManagedIdentityCreds=true >/dev/null
 
       - name: Remover DOCKER_* antigos (evita conflito com MI)
         shell: bash
         run: |
-          for SLOT in "" "--slot staging"; do
-            az webapp config appsettings delete -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" $SLOT \
-              --setting-names DOCKER_REGISTRY_SERVER_URL DOCKER_REGISTRY_SERVER_USERNAME DOCKER_REGISTRY_SERVER_PASSWORD || true
-          done
+          az webapp config appsettings delete -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --setting-names DOCKER_REGISTRY_SERVER_URL DOCKER_REGISTRY_SERVER_USERNAME DOCKER_REGISTRY_SERVER_PASSWORD || true
 
-      - name: Descobrir cor atual (BLUE/GREEN) da produção
-        id: color
-        shell: bash
-        run: |
-          CUR=$(az webapp config appsettings list -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-                --query "[?name=='COLOR'].value | [0]" -o tsv)
-          if [ -z "$CUR" ]; then CUR="blue"; fi
-          if [ "$CUR" = "blue" ]; then NEXT="green"; else NEXT="blue"; fi
-          echo "current=$CUR"
-          echo "next=$NEXT"
-          echo "current=$CUR" >> "$GITHUB_OUTPUT"
-          echo "next=$NEXT"    >> "$GITHUB_OUTPUT"
-
-      - name: Promover SHA -> :{next} (tag de staging no ACR)
+      - name: Promover SHA -> :live (retag no ACR, atômico)
         shell: bash
         run: |
           set -euo pipefail
-          NEXT="${{ steps.color.outputs.next }}"
           for s in ${PRIVATE_SERVICES}; do
-            echo ">> promote ${REGISTRY}/$s:${{ needs.build-and-push.outputs.tag }}  →  $s:${NEXT}"
+            echo ">> promote ${REGISTRY}/$s:${{ needs.build-and-push.outputs.tag }}  →  $s:live"
             az acr import -n "$ACR_NAME" \
               --source "${REGISTRY}/$s:${{ needs.build-and-push.outputs.tag }}" \
-              -t "$s:${NEXT}" --force
+              -t "$s:live" --force
           done
 
-      - name: Instalar yq (para patch efêmero do compose)
+      - name: App Settings essenciais (porta/health/AlwaysOn)
         shell: bash
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.2/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --settings \
+            WEBSITES_PORT=80 \
+            WEBSITES_HEALTHCHECK_PATH=/healthz \
+            WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
+            WEBSITES_ENABLE_APP_SERVICE_STORAGE=true >/dev/null
 
-      - name: Patch efêmero do compose para usar :{next} (somente serviços privados)
-        id: patch
+          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --set siteConfig.alwaysOn=true siteConfig.healthCheckPath="/healthz" >/dev/null
+
+      - name: Aplicar compose único
         shell: bash
         run: |
           set -euo pipefail
           [ -f "${COMPOSE_FILE}" ] || { echo "::error::Arquivo não encontrado: ${COMPOSE_FILE}"; exit 1; }
-          NEXT="${{ steps.color.outputs.next }}"
-
-          TMP=$(mktemp)
-          cp "${COMPOSE_FILE}" "$TMP"
-
-          # Atualiza image das privadas -> REGISTRY/svc:next
-          yq -i '.services.edge.image = env(REGISTRY) + "/edge:" + env(NEXT)'              "$TMP"
-          yq -i '.services."mqtt-kafka-bridge".image = env(REGISTRY) + "/mqtt-kafka-bridge:" + env(NEXT)' "$TMP"
-          yq -i '.services."kafka-redis-consumer".image = env(REGISTRY) + "/kafka-redis-consumer:" + env(NEXT)' "$TMP"
-
-          echo "tmp=$TMP" >> "$GITHUB_OUTPUT"
-
-      - name: App Settings básicos (porta/health/AlwaysOn) no slot staging
-        shell: bash
-        run: |
-          az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging --settings \
-            WEBSITES_PORT=80 \
-            WEBSITES_HEALTHCHECK_PATH=/healthz \
-            WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
-            WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
-            COLOR=${{ steps.color.outputs.next }} >/dev/null
-
-          az webapp update -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging \
-            --set siteConfig.alwaysOn=true siteConfig.healthCheckPath="/healthz" >/dev/null
-
-      - name: Aplicar compose patchado no slot staging
-        shell: bash
-        run: |
-          az webapp config container set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging \
+          az webapp config container set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
             --multicontainer-config-type COMPOSE \
-            --multicontainer-config-file "${{ steps.patch.outputs.tmp }}"
+            --multicontainer-config-file "${COMPOSE_FILE}"
 
-      - name: Restart staging + gate /healthz (até 10 min)
+      - name: Restart + health gate
         shell: bash
         run: |
           set -euo pipefail
-          az webapp restart -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging
-          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --slot staging --query defaultHostName -o tsv)
+          az webapp restart -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME"
+          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
           echo "Verificando https://${HOST}/healthz"
           for i in {1..120}; do
             CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://${HOST}/healthz" || true)
             if [[ "$CODE" =~ ^20[0-9]$ || "$CODE" =~ ^30[0-9]$ ]]; then
-              echo "STAGING HEALTH OK ($CODE)"; exit 0
+              echo "HEALTH OK ($CODE)"; exit 0
             fi
-            sleep 5
+            echo "Aguardando... ($CODE)"; sleep 5
           done
-          echo "::error::staging /healthz não respondeu 2xx/3xx no tempo limite."; exit 1
-
-      - name: Swap slots (staging → produção)
-        run: |
-          az webapp deployment slot swap -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --slot staging --target-slot production
-
-      - name: Marcar cor em produção e validar /healthz pós-swap
-        shell: bash
-        run: |
-          set -euo pipefail
-          az webapp config appsettings set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --settings COLOR=${{ steps.color.outputs.next }} >/dev/null
-
-          HOST=$(az webapp show -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" --query defaultHostName -o tsv)
-          echo "Verificando produção: https://${HOST}/healthz"
-          for i in {1..120}; do
-            CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://${HOST}/healthz" || true)
-            if [[ "$CODE" =~ ^20[0-9]$ || "$CODE" =~ ^30[0-9]$ ]]; then
-              echo "PROD HEALTH OK ($CODE)"; exit 0
-            fi
-            sleep 5
-          done
-          echo "::error::produção /healthz não respondeu 2xx/3xx após swap."; exit 1
-
-      - name: (Opcional) Sincronizar a outra cor p/ rollback rápido
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          CUR="${{ steps.color.outputs.current }}"
-          for s in ${PRIVATE_SERVICES}; do
-            az acr import -n "$ACR_NAME" \
-              --source "${REGISTRY}/$s:${{ needs.build-and-push.outputs.tag }}" \
-              -t "$s:${CUR}" --force
-          done
+          echo "::error::/healthz não respondeu 2xx/3xx no tempo limite."
+          exit 1
