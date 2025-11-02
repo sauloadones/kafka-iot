@@ -12,3 +12,4 @@ EXPOSE 8000
 
 # O comando agora inicia o servidor Uvicorn
 CMD ["python", "-m", "app.main"]
+

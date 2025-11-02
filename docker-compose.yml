@@ -1,111 +1,104 @@
-version: "3.8"
+version: "3.9"
 
 services:
-  # --- Proxy/Nginx (edge) ---
-  edge:
-    image: iotkafka.azurecr.io/edge:live
-    restart: always
-    depends_on:
-      - redpanda
-      - redpanda-console
-      - schema-registry
-      - redis
-      - redis-commander
-      - mqtt-kafka-bridge
-      - kafka-redis-consumer
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "80:80"
-
-  # --- Redpanda (Kafka) ---
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
-    restart: always
-    command: >
-      redpanda start --smp 1 --memory 1G --overprovisioned
-      --node-id 0
-      --kafka-addr PLAINTEXT://0.0.0.0:29092
-      --advertise-kafka-addr PLAINTEXT://redpanda:29092
-    expose: ["29092"]
+    container_name: redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
-    restart: always
+    container_name: schema-registry
+    restart: unless-stopped
+    depends_on: [ redpanda ]
+    ports:
+      - "8081:8081"
     environment:
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://redpanda:29092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-    expose: ["8081"]
-    depends_on: [redpanda]
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "redpanda:29092"
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # Em produção, evite expor publicamente:
+    # ports: [ "6379:6379" ]
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    depends_on: [ redis ]
+    ports:
+      - "8082:8081"
+    environment:
+      REDIS_HOSTS: "local:redis:6379"
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
-    restart: always
+    container_name: redpanda-console
+    restart: unless-stopped
+    depends_on: [ redpanda ]
+    ports:
+      - "8080:8080"
     environment:
-      KAFKA_BROKERS: redpanda:29092
-      SCHEMAREGISTRY_ENABLED: "true"
-      SCHEMAREGISTRY_URLS: http://schema-registry:8081
-      CONSOLE_LISTEN_ADDRESS: 0.0.0.0:8080
-    expose: ["8080"]
-    depends_on: [redpanda, schema-registry]
+      KAFKA_BROKERS: "redpanda:29092"
 
-  # --- Redis seguro ---
-  redis:
-    image: redis/redis-stack-server:7.4.0-v2
-    restart: always
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        exec redis-server --appendonly yes \
-                          --bind 0.0.0.0 \
-                          --protected-mode yes \
-                          --requirepass "$${REDIS_PASSWORD}"
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-    expose: ["6379"]
-
-  # UI do Redis (sem URL_PREFIX; com senha)
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    restart: always
-    environment:
-      PORT: "8081"
-      # label:host:port:db:password
-      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD}
-      HTTP_USER: admin
-      HTTP_PASSWORD: ${REDIS_CMD_PASS}
-    expose: ["8081"]
-    depends_on: [redis]
-
-  # --- FastAPI bridge ---
   mqtt-kafka-bridge:
-    image: iotkafka.azurecr.io/mqtt-kafka-bridge:live
+    image: __ACR_LOGIN__/mqtt-kafka-bridge:latest
+    container_name: mqtt-kafka-bridge
     restart: always
-    command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8000
-      --root-path /api --proxy-headers --forwarded-allow-ips="*"
+    ports:
+      - "8000:8000"
+    depends_on: [ redpanda ]
     environment:
-      KAFKA_BOOTSTRAP: redpanda:29092
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      PYTHONUNBUFFERED: "1"
-    expose: ["8000"]
-    depends_on: [redpanda, schema-registry, redis]
+      MQTT_BROKER: "broker.hivemq.com"
+      MQTT_PORT: 1883
+      KAFKA_BROKER: "redpanda:29092"
+      KAFKA_TOPIC: "iot-data"
 
   kafka-redis-consumer:
-    image: iotkafka.azurecr.io/kafka-redis-consumer:live
+    image: __ACR_LOGIN__/kafka-redis-consumer:latest
+    container_name: kafka-redis-consumer
     restart: always
+    depends_on: [ redpanda, redis ]
     environment:
-      KAFKA_BOOTSTRAP: redpanda:29092
-      GROUP_ID: kafka-redis-consumer-group
-      SESSION_TIMEOUT_MS: "30000"
-      HEARTBEAT_INTERVAL_MS: "10000"
-      TOPIC: iot-data
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-    depends_on: [redpanda, redis]
+      KAFKA_BROKER: "redpanda:29092"
+      KAFKA_TOPIC: "iot-data"
+      REDIS_HOST: "redis"
+
+  # Watchtower — olha somente suas imagens privadas do ACR
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      --interval 60
+      --cleanup
+      mqtt-kafka-bridge
+      kafka-redis-consumer
+
+volumes:
+  redpanda_data:

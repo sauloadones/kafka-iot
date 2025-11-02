@@ -1,0 +1,44 @@
+name: CI - Build (ACR Tasks)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME:           ${{ vars.ACR_NAME }}            # ex: arturiotacr
+  AZ_SUBSCRIPTION_ID: ${{ vars.AZ_SUBSCRIPTION_ID }}
+  AZ_TENANT_ID:       ${{ vars.AZ_TENANT_ID }}
+  AZ_CLIENT_ID:       ${{ vars.AZ_CLIENT_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ env.AZ_CLIENT_ID }}
+          tenant-id:       ${{ env.AZ_TENANT_ID }}
+          subscription-id: ${{ env.AZ_SUBSCRIPTION_ID }}
+
+      # builda DENTRO do ACR (rápido e limpo). Marque latest + SHA.
+      - name: Build mqtt-kafka-bridge
+        run: |
+          az acr build -r "$ACR_NAME" \
+            -t mqtt-kafka-bridge:latest \
+            -t mqtt-kafka-bridge:${{ github.sha }} \
+            ./python-bridge
+
+      - name: Build kafka-redis-consumer
+        run: |
+          az acr build -r "$ACR_NAME" \
+            -t kafka-redis-consumer:latest \
+            -t kafka-redis-consumer:${{ github.sha }} \
+            ./kafka-redis-consumer
