@@ -34,7 +34,7 @@ class KafkaRedisConsumer:
         """Conecta ao Redis com retentativas."""
         while True:
             try:
-                client = redis.Redis(host=self.redis_host, port=6379, db=0, decode_responses=True)
+                client = redis.Redis(host=self.redis_host, port=6379,  password="1234", db=0, decode_responses=True)
                 client.ping()
                 self.logger.info("Conectado ao Redis com sucesso!")
                 return client
