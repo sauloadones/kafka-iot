@@ -5,6 +5,7 @@ import time
 import threading
 import queue
 import logging
+import math
 
 # =========================
 # Logging
@@ -22,6 +23,9 @@ MQTT_BROKER = "IP_DO_SERVIDOR"  # broker público da placa
 MQTT_PORT = 1883
 KAFKA_BROKER = "localhost:9092"
 KAFKA_TOPIC = "iot-data"
+
+# Valor de calibração do MQ-135 (ajuste conforme seu sensor)
+R0 = 5500  # resistência do sensor em ar limpo (~400 ppm CO₂)
 
 # Buffer para mensagens que não puderam ser enviadas ao Kafka
 kafka_queue = queue.Queue(maxsize=1000)
@@ -112,15 +116,40 @@ class KafkaDataBridge:
             time.sleep(1)
 
 # =========================
+# Função para calcular CO₂ (ppm)
+# =========================
+def calculate_co2_ppm(rs, r0=R0):
+    try:
+        ratio = rs / r0
+        ppm = 116.6020682 * math.pow(ratio, -2.769034857)
+        return round(ppm, 2)
+    except Exception as e:
+        logging.error(f"Erro no cálculo de CO₂: {e}")
+        return None
+
+# =========================
 # Callback de dados
 # =========================
 def mqtt_data_callback(device_id, payload):
-    message = {
-        "device_id": device_id,
-        "payload": payload,
-        "timestamp": int(time.time())
-    }
-    kafka_bridge.send(message)
+    try:
+        data = json.loads(payload)
+
+        rs = data.get("mq_rs")
+        if rs:
+            co2_ppm = calculate_co2_ppm(rs)
+            data["co2_ppm"] = co2_ppm
+            logging.info(f"CO₂ calculado: {co2_ppm} ppm")
+
+        message = {
+            "device_id": device_id,
+            "payload": json.dumps(data),
+            "timestamp": int(time.time())
+        }
+
+        kafka_bridge.send(message)
+
+    except Exception as e:
+        logging.error(f"Erro ao processar dados do dispositivo {device_id}: {e}")
 
 # =========================
 # Inicialização
