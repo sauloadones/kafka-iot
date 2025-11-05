@@ -58,3 +58,4 @@ jobs:
           tags: |
             ${{ env.ACR_LOGIN }}/${{ env.IMG4 }}:latest
             ${{ env.ACR_LOGIN }}/${{ env.IMG4 }}:${{ github.sha }}
+          no-cache: true
