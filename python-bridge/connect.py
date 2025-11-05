@@ -121,7 +121,7 @@ class KafkaDataBridge:
 def calculate_co2_ppm(rs, r0=R0):
     try:
         ratio = rs / r0
-        ppm = 116.6020682 * math.pow(ratio, -2.769034857)
+        ppm = 116.6020682 * math.pow(ratio, -2.7690348537)
         return round(ppm, 2)
     except Exception as e:
         logging.error(f"Erro no cálculo de CO₂: {e}")
