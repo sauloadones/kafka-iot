@@ -1,0 +1,5 @@
+pyspark
+redis
+requests
+pandas
+numpy

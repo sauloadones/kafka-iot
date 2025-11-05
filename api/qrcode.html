@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>QR Code MFA</title>
+    <style>
+      body {
+        background-color: #000; /* tela preta */
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        flex-direction: column;
+        color: #fff;
+        font-family: Arial, sans-serif;
+      }
+
+      h1 {
+        margin-bottom: 20px;
+        color: #00f; /* título azul, opcional */
+      }
+
+      img.qr {
+        width: 250px;
+        height: 250px;
+        /* Filtro CSS para colorir o QR Code: */
+        filter: invert(0) sepia(1) saturate(5) hue-rotate(200deg);
+        /* hue-rotate(200deg) = azul, 
+         hue-rotate(0deg) ou hue-rotate(350deg) = vermelho */
+      }
+    </style>
+  </head>
+  <body>
+    <h1>QR Code MFA</h1>
+    <img
+      class="qr"
+      src="data:image/png;base64,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"
+      ,
+    />
+  </body>
+</html>

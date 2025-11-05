@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gráfico em Tempo Real</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        .chart-container { width: 80%; max-width: 900px; }
+        #connection-status { margin-top: 15px; font-style: italic; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Monitoramento de Sensores</h1>
+    <div class="chart-container">
+        <canvas id="realtimeChart"></canvas>
+    </div>
+    <div id="connection-status">Conectando...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.1/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+    <script>
+       
+        const DEVICE_ID = "0C4EA065A598";
+        const MAX_DATA_POINTS = 60;
+        const API_BASE_URL = "http://localhost:3000";
+
+      
+        const ctx = document.getElementById('realtimeChart').getContext('2d');
+        const statusDiv = document.getElementById('connection-status');
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], 
+               
+                datasets: [
+                    {
+                        label: 'Temperatura (°C)',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.5)',
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Umidade (%)',
+                        data: [],
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'minute',
+                            tooltipFormat: 'dd/MM/yyyy HH:mm:ss',
+                            displayFormats: { minute: 'HH:mm' }
+                        },
+                        title: { display: true, text: 'Horário' }
+                    },
+                    y: {
+                        title: { display: true, text: 'Valores' }
+                    }
+                }
+            }
+        });
+
+        async function loadInitialData() {
+            try {
+                statusDiv.textContent = 'Carregando histórico...';
+                const response = await fetch(`${API_BASE_URL}/devices/${DEVICE_ID}/history`);
+                const historyData = await response.json();
+
+                for (const dataPoint of historyData) {
+                    const timestampMs = dataPoint.timestamp * 1000;
+                    const temperature = dataPoint.value.temperature;
+                    const humidity = dataPoint.value.humidity;
+
+                
+                    if (temperature !== undefined && humidity !== undefined) {
+                        chart.data.labels.push(timestampMs);
+                        chart.data.datasets[0].data.push(temperature);
+                        chart.data.datasets[1].data.push(humidity);
+                    }
+                }
+                chart.update();
+                statusDiv.textContent = 'Histórico carregado. Aguardando atualizações...';
+            } catch (error) {
+                console.error("Falha ao carregar dados históricos:", error);
+                statusDiv.textContent = 'Erro ao carregar histórico.';
+            }
+        }
+
+        function listenForRealtimeUpdates() {
+            const eventSource = new EventSource(`${API_BASE_URL}/devices/${DEVICE_ID}/updates`);
+
+            eventSource.onopen = () => {
+                statusDiv.textContent = `Conectado! Ouvindo atualizações para o dispositivo ${DEVICE_ID}.`;
+            };
+
+            eventSource.onmessage = (event) => {
+                const newDataPoint = JSON.parse(event.data);
+                
+                const timestampMs = newDataPoint.timestamp * 1000;
+                const temperature = newDataPoint.payload.temperature;
+                const humidity = newDataPoint.payload.humidity;
+
+                if (temperature === undefined || humidity === undefined) return;
+
+                
+                chart.data.labels.push(timestampMs);
+                chart.data.datasets[0].data.push(temperature);
+                chart.data.datasets[1].data.push(humidity);
+
+           
+                if (chart.data.labels.length > MAX_DATA_POINTS) {
+                    chart.data.labels.shift();
+                    chart.data.datasets.forEach(dataset => {
+                        dataset.data.shift();
+                    });
+                }
+
+                chart.update();
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('Erro na conexão SSE:', error);
+                statusDiv.textContent = 'Conexão SSE perdida.';
+            };
+        }
+
+        loadInitialData();
+        listenForRealtimeUpdates();
+    </script>
+</body>
+</html>
