@@ -1,89 +1,32 @@
+# app.py (bridge) — versão enxuta e compatível com seu compose
+
+import os, json, time, math, logging, queue, threading
 import paho.mqtt.client as mqtt
 from kafka import KafkaProducer
-import json
-import time
-import threading
-import queue
-import logging
-import math
 
-# =========================
-# Logging
-# =========================
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 
-# =========================
-# Configurações
-# =========================
-MQTT_BROKER = "IP_DO_SERVIDOR"  # broker público da placa
-MQTT_PORT = 1883
-KAFKA_BROKER = "localhost:9092"
-KAFKA_TOPIC = "iot-data"
+# ===== Config por ENV (casa com o docker-compose) =====
+MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.hivemq.com")
+MQTT_PORT   = int(os.getenv("MQTT_PORT", "1883"))
+KAFKA_BROKER= os.getenv("KAFKA_BROKER", "redpanda:29092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "iot-data")
+R0          = float(os.getenv("MQ135_R0", "5500"))
 
-# Valor de calibração do MQ-135 (ajuste conforme seu sensor)
-R0 = 5500  # resistência do sensor em ar limpo (~400 ppm CO₂)
-
-# Buffer para mensagens que não puderam ser enviadas ao Kafka
 kafka_queue = queue.Queue(maxsize=1000)
 
-# =========================
-# Serviço MQTT (somente dados)
-# =========================
-class MQTTDataBridge:
-    def __init__(self, broker, port, keepalive=60):
-        self.broker = broker
-        self.port = port
-        self.keepalive = keepalive
-        self.client = mqtt.Client()
-        self.on_data_callback = None
+def calculate_co2_ppm(rs, r0=R0):
+    try:
+        ratio = float(rs) / float(r0)
+        return round(116.6020682 * math.pow(ratio, -2.7690348537), 2)
+    except Exception as e:
+        logging.exception("Erro no cálculo de CO2"); return None
 
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
-
-    def register_callback(self, on_data):
-        """Registra a função que será chamada com dados recebidos."""
-        self.on_data_callback = on_data
-
-    def on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            logging.info("Conectado ao MQTT Broker com sucesso!")
-            client.subscribe("devices/+/data")  # só tópicos de dados
-        else:
-            logging.error(f"Falha na conexão MQTT, rc={rc}")
-
-    def on_message(self, client, userdata, msg):
-        device_id = msg.topic.split('/')[1]
-        payload = msg.payload.decode()
-        logging.info(f"Mensagem recebida do dispositivo {device_id}: {payload}")
-        if self.on_data_callback:
-            self.on_data_callback(device_id, payload)
-
-    def connect(self):
-        while True:
-            try:
-                logging.info(f"Conectando ao MQTT Broker {self.broker}:{self.port}...")
-                self.client.connect(self.broker, self.port, self.keepalive)
-                break
-            except Exception as e:
-                logging.error(f"Erro ao conectar ao MQTT: {e}. Tentando novamente em 5s...")
-                time.sleep(5)
-
-    def start(self):
-        self.client.loop_start()
-        logging.info("Loop MQTT iniciado.")
-
-# =========================
-# Serviço Kafka (somente envio de dados)
-# =========================
 class KafkaDataBridge:
     def __init__(self, broker, topic):
-        self.broker = broker
         self.topic = topic
         self.producer = None
+        self.broker = broker
         self.connect()
 
     def connect(self):
@@ -91,81 +34,82 @@ class KafkaDataBridge:
             try:
                 self.producer = KafkaProducer(
                     bootstrap_servers=[self.broker],
-                    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+                    value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode("utf-8"),
+                    linger_ms=5,
                 )
-                logging.info("Conectado ao Kafka com sucesso!")
+                logging.info(f"Kafka conectado em {self.broker}")
                 break
             except Exception as e:
-                logging.error(f"Erro ao conectar ao Kafka: {e}. Tentando novamente em 5s...")
-                time.sleep(5)
+                logging.error(f"Kafka erro: {e}; retry 5s"); time.sleep(5)
 
-    def send(self, data):
+    def send(self, key_bytes, data):
         try:
-            self.producer.send(self.topic, data)
-            self.producer.flush()
-            logging.info(f"Dado enviado para Kafka: {data}")
+            self.producer.send(self.topic, key=key_bytes, value=data)
         except Exception as e:
-            logging.error(f"Erro ao enviar para Kafka, adicionando ao buffer: {e}")
-            kafka_queue.put(data)
+            logging.error(f"Falha send → buffer: {e}"); 
+            try: kafka_queue.put_nowait((key_bytes, data))
+            except queue.Full: logging.error("Buffer Kafka cheio; descartando mensagem")
 
-    def retry_buffered_messages(self):
+    def retry(self):
         while True:
-            if not kafka_queue.empty():
-                data = kafka_queue.get()
-                self.send(data)
-            time.sleep(1)
+            try:
+                key_bytes, data = kafka_queue.get(timeout=1)
+                self.send(key_bytes, data)
+            except queue.Empty:
+                pass
 
-# =========================
-# Função para calcular CO₂ (ppm)
-# =========================
-def calculate_co2_ppm(rs, r0=R0):
-    try:
-        ratio = rs / r0
-        ppm = 116.6020682 * math.pow(ratio, -2.7690348537)
-        return round(ppm, 2)
-    except Exception as e:
-        logging.error(f"Erro no cálculo de CO₂: {e}")
-        return None
+class MQTTDataBridge:
+    def __init__(self, broker, port, keepalive=60):
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+        self.broker, self.port, self.keepalive = broker, port, keepalive
 
-# =========================
-# Callback de dados
-# =========================
-def mqtt_data_callback(device_id, payload):
-    try:
-        data = json.loads(payload)
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            logging.info("MQTT conectado"); client.subscribe("devices/+/data")
+        else:
+            logging.error(f"MQTT rc={rc}")
 
-        rs = data.get("mq_rs")
-        if rs:
-            co2_ppm = calculate_co2_ppm(rs)
-            data["co2_ppm"] = co2_ppm
-            logging.info(f"CO₂ calculado: {co2_ppm} ppm")
+    def on_message(self, client, userdata, msg):
+        device_id = msg.topic.split('/')[1]
+        try:
+            raw = json.loads(msg.payload.decode())
+        except Exception:
+            logging.error("Payload MQTT não é JSON; ignorando"); return
 
-        message = {
+        # Calcula CO2 se tiver mq_rs
+        if "mq_rs" in raw and raw["mq_rs"] is not None:
+            raw["co2_ppm"] = calculate_co2_ppm(raw["mq_rs"])
+
+        # Mensagem achatada (sem 'payload' aninhado)
+        event = {
             "device_id": device_id,
-            "payload": json.dumps(data),
-            "timestamp": int(time.time())
+            "timestamp": int(time.time()),
+            **raw
         }
 
-        kafka_bridge.send(message)
+        kafka_bridge.send(device_id.encode(), event)
+        logging.info(f"Enviado ao Kafka: {event}")
 
-    except Exception as e:
-        logging.error(f"Erro ao processar dados do dispositivo {device_id}: {e}")
+    def start(self):
+        while True:
+            try:
+                logging.info(f"Conectando MQTT {self.broker}:{self.port}")
+                self.client.connect(self.broker, self.port, self.keepalive)
+                break
+            except Exception as e:
+                logging.error(f"MQTT erro: {e}; retry 5s"); time.sleep(5)
+        self.client.loop_start()
 
-# =========================
-# Inicialização
-# =========================
-mqtt_bridge = MQTTDataBridge(MQTT_BROKER, MQTT_PORT)
+# ===== Boot =====
 kafka_bridge = KafkaDataBridge(KAFKA_BROKER, KAFKA_TOPIC)
+threading.Thread(target=kafka_bridge.retry, daemon=True).start()
 
-mqtt_bridge.register_callback(on_data=mqtt_data_callback)
-threading.Thread(target=kafka_bridge.retry_buffered_messages, daemon=True).start()
-
-mqtt_bridge.connect()
+mqtt_bridge = MQTTDataBridge(MQTT_BROKER, MQTT_PORT)
 mqtt_bridge.start()
 
 try:
-    while True:
-        time.sleep(1)
+    while True: time.sleep(1)
 except KeyboardInterrupt:
-    logging.info("Serviço encerrado.")
-    mqtt_bridge.client.loop_stop()
+    pass
