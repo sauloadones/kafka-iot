@@ -30,6 +30,7 @@ jobs:
           tags: |
             ${{ env.ACR_LOGIN }}/${{ env.IMG1 }}:latest
             ${{ env.ACR_LOGIN }}/${{ env.IMG1 }}:${{ github.sha }}
+          no-cache: true
 
       - name: Build+Push kafka-redis-consumer
         uses: docker/build-push-action@v6
