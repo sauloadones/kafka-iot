@@ -39,7 +39,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY spark_data_process_service.py .
 
 # Variáveis padrão
-ENV REDIS_HOST=iot-kafka-pip.northcentralus.cloudapp.azure.com
+ENV REDIS_HOST=localhost
 ENV REDIS_PORT=6379
 ENV REDIS_PASSWORD=1234
 ENV API_URL=http://nest:3000/data-process

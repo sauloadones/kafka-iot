@@ -8,6 +8,8 @@ env:
   ACR_LOGIN: ${{ secrets.ACR_LOGIN }}
   IMG1: mqtt-kafka-bridge
   IMG2: kafka-redis-consumer
+  IMG3: nest
+  IMG4: spark
 
 jobs:
   build:
@@ -40,3 +42,19 @@ jobs:
           tags: |
             ${{ env.ACR_LOGIN }}/${{ env.IMG2 }}:latest
             ${{ env.ACR_LOGIN }}/${{ env.IMG2 }}:${{ github.sha }}
+      - name: Build+Push nest
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN }}/${{ env.IMG3 }}:latest
+            ${{ env.ACR_LOGIN }}/${{ env.IMG3 }}:${{ github.sha }}
+      - name: Build+Push spark
+        uses: docker/build-push-action@v6
+        with:
+          context: ./spark
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN }}/${{ env.IMG4 }}:latest
+            ${{ env.ACR_LOGIN }}/${{ env.IMG4 }}:${{ github.sha }}
