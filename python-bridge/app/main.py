@@ -48,7 +48,9 @@ def main():
     uvicorn.run(
         app,
         host=settings.API_HOST,
-        port=settings.API_PORT
+        port=settings.API_PORT,
+        forwarded_allow_ips='*',  # Allow proxy headers from all sources
+        proxy_headers=True        # Use proxy headers
     )
 
 if __name__ == "__main__":
