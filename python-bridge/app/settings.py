@@ -23,4 +23,5 @@ KAFKA_TOPIC_DATA = os.getenv("KAFKA_TOPIC", "iot-data")
 # Configurações da API
 API_HOST = "0.0.0.0"
 API_PORT = 8000
+ROOT_PATH: str = "/bridge"
 DEVICE_OFFLINE_TIMEOUT = MQTT_KEEPALIVE * 2.5 # Tempo em segundos para considerar um dispositivo offline

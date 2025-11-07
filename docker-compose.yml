@@ -97,6 +97,9 @@ services:
       REDIS_HOST: "redis"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
     # usa a rede default do compose
+    ports:
+    # host:contêiner → Nginx falará com 127.0.0.1:8090
+    - "127.0.0.1:8090:8000"
 
   watchtower:
     image: containrrr/watchtower

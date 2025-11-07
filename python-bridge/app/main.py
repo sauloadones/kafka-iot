@@ -3,7 +3,7 @@ import threading
 import uvicorn
 import json
 import time
-
+import os
 from app import settings
 from app.services.mqtt_service import MqttService
 from app.services.kafka_service import KafkaService
@@ -47,8 +47,11 @@ def main():
     logging.info(f"Iniciando API na porta {settings.API_PORT}")
     uvicorn.run(
         app,
-        host=settings.API_HOST,
-        port=settings.API_PORT
+        host=settings.API_HOST,        # no container, use 0.0.0.0
+        port=settings.API_PORT,        # 8000 no contêiner; Nginx fala com 127.0.0.1:8090 → 8000
+        root_path=settings.ROOT_PATH,           # <- chave para servir em /bridge/
+        proxy_headers=True,            # honra X-Forwarded-Proto/Host do Nginx
+        forwarded_allow_ips="*"        # ou limite ao IP do Nginx se preferir
     )
 
 if __name__ == "__main__":
