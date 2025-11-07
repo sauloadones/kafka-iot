@@ -1,34 +1,6 @@
 version: "3.9"
 
 services:
-  traefik:
-    image: traefik:v3.1
-    container_name: traefik
-    restart: unless-stopped
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=sparknet            # <- agora existe com esse nome
-      - --entrypoints.web.address=:80
-      - --entrypoints.web.http.redirections.entryPoint.to=:443
-      - --entrypoints.web.http.redirections.entryPoint.scheme=https
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.httpchallenge=true
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
-      - --api.dashboard=false
-      - --entrypoints.redis-tls.address=:6380
-      # - --log.level=DEBUG                           # (opcional) pra debugar 502
-    ports:
-      - "80:80"
-      - "443:443"
-      - "6380:6380"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_letsencrypt:/letsencrypt
-    networks:
-      - sparknet
 
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:latest
@@ -50,8 +22,7 @@ services:
       - PLAINTEXT://redpanda:29092
     volumes:
       - redpanda_data:/var/lib/redpanda/data
-    networks:
-      - sparknet  
+    # Kafka fica só na rede interna do Docker (sem publish)
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
@@ -62,16 +33,8 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "redpanda:29092"
       SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.schema.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/schema`)
-      - traefik.http.routers.schema.entrypoints=websecure
-      - traefik.http.routers.schema.tls.certresolver=le
-      - traefik.http.middlewares.schema-strip.stripPrefix.prefixes=/schema
-      - traefik.http.routers.schema.middlewares=schema-strip
-      - traefik.http.services.schema-svc.loadbalancer.server.port=8081
-    networks:
-      - sparknet
+    ports:
+      - "127.0.0.1:8081:8081"   # Nginx (host) acessa aqui
 
   redis:
     image: redis:7-alpine
@@ -84,15 +47,6 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
-    labels:
-      traefik.enable: "true"
-      traefik.tcp.routers.redis-tcp.rule: "HostSNI(`iot-kafka-pip.northcentralus.cloudapp.azure.com`)"
-      traefik.tcp.routers.redis-tcp.entrypoints: "redis-tls"
-      traefik.tcp.routers.redis-tcp.tls.certresolver: "le"
-      traefik.tcp.routers.redis-tcp.service: "redis-tcp-svc"
-      traefik.tcp.services.redis-tcp-svc.loadbalancer.server.port: "6379"
-    networks:
-      - sparknet
 
   redis-commander:
     image: rediscommander/redis-commander:latest
@@ -101,33 +55,11 @@ services:
     depends_on: [ redis ]
     environment:
       REDIS_HOSTS: "local:redis:6379:0:${REDIS_PASSWORD}"
-    labels:
-      traefik.enable: "true"
-
-      traefik.http.middlewares.redis-slash.redirectregex.regex: "^/redis$"
-      traefik.http.middlewares.redis-slash.redirectregex.replacement: "/redis/"
-      traefik.http.middlewares.redis-slash.redirectregex.permanent: "true"
-
-      traefik.http.routers.redis-root.rule: "Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/redis`)"
-      traefik.http.routers.redis-root.entrypoints: "websecure"
-      traefik.http.routers.redis-root.tls.certresolver: "le"
-      traefik.http.routers.redis-root.middlewares: "redis-slash"
-      traefik.http.routers.redis-root.service: "redis-svc"
-      traefik.http.routers.redis-root.priority: "1000"
-
-      traefik.http.middlewares.redis-strip.stripPrefix.prefixes: "/redis"
-      traefik.http.middlewares.redis-xfp.headers.customrequestheaders.X-Forwarded-Prefix: "/redis"
-
-      traefik.http.routers.redis.rule: "Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/redis/`)"
-      traefik.http.routers.redis.entrypoints: "websecure"
-      traefik.http.routers.redis.tls.certresolver: "le"
-      traefik.http.routers.redis.middlewares: "redis-strip,redis-xfp"
-      traefik.http.routers.redis.priority: "900"
-      traefik.http.routers.redis.service: "redis-svc"
-
-      traefik.http.services.redis-svc.loadbalancer.server.port: "8081"
-    networks:
-      - sparknet
+      # Opcional: exigir login na UI
+      # HTTP_USER: admin
+      # HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD}
+    ports:
+      - "127.0.0.1:8082:8081"   # evita conflito com 8081
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:latest
@@ -138,23 +70,10 @@ services:
       KAFKA_BROKERS: "redpanda:29092"
       REDPANDA_ADMIN_URL: "http://redpanda:9644"
       SERVER_LISTEN_ADDRESS: "0.0.0.0:8080"
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.console.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/console`)
-      - traefik.http.routers.console.entrypoints=websecure
-      - traefik.http.routers.console.tls.certresolver=le
-      - traefik.http.middlewares.console-strip.stripPrefix.prefixes=/console
-      - traefik.http.routers.console.middlewares=console-strip
-      - traefik.http.services.console-svc.loadbalancer.server.port=8080
-      - traefik.http.middlewares.to-console.redirectregex.regex=^/$
-      - traefik.http.middlewares.to-console.redirectregex.replacement=/console
-      - traefik.http.middlewares.to-console.redirectregex.permanent=true
-      - traefik.http.routers.root.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/`)
-      - traefik.http.routers.root.entrypoints=websecure
-      - traefik.http.routers.root.tls.certresolver=le
-      - traefik.http.routers.root.middlewares=to-console
-    networks:
-      - sparknet
+      # Para servir em subcaminho (/console). Se sua imagem ignorar, use sub_filter no Nginx.
+      SERVER_BASEPATH: "/console"
+    ports:
+      - "127.0.0.1:8080:8080"   # Nginx (host) acessa aqui
 
   mqtt-kafka-bridge:
     image: iotkafkaacrwtvgek.azurecr.io/mqtt-kafka-bridge:latest
@@ -166,43 +85,6 @@ services:
       MQTT_PORT: 1883
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
-    labels:
-      - traefik.enable=true
-
-      - traefik.http.routers.bridge-root.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/bridge`)
-      - traefik.http.routers.bridge-root.entrypoints=websecure
-      - traefik.http.routers.bridge-root.tls.certresolver=le
-      - traefik.http.middlewares.bridge-slash.redirectregex.regex=^/bridge$
-      - traefik.http.middlewares.bridge-slash.redirectregex.replacement=/bridge/
-      - traefik.http.middlewares.bridge-slash.redirectregex.permanent=true
-      - traefik.http.routers.bridge-root.middlewares=bridge-slash
-      - traefik.http.routers.bridge-root.priority=500
-
-      - traefik.http.routers.bridge.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/bridge/`)
-      - traefik.http.routers.bridge.entrypoints=websecure
-      - traefik.http.routers.bridge.tls.certresolver=le
-      - traefik.http.middlewares.bridge-strip.stripPrefix.prefixes=/bridge
-      - traefik.http.middlewares.bridge-xfp.headers.customrequestheaders.X-Forwarded-Prefix=/bridge
-      - traefik.http.routers.bridge.middlewares=bridge-strip,bridge-xfp
-      - traefik.http.routers.bridge.priority=400
-      - traefik.http.routers.bridge.service=bridge-svc
-      - traefik.http.services.bridge-svc.loadbalancer.server.port=8000
-
-      - traefik.http.routers.bridge-openapi.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/bridge/openapi.json`)
-      - traefik.http.routers.bridge-openapi.entrypoints=websecure
-      - traefik.http.routers.bridge-openapi.tls.certresolver=le
-      - traefik.http.routers.bridge-openapi.middlewares=bridge-strip
-      - traefik.http.routers.bridge-openapi.priority=600
-      - traefik.http.routers.bridge-openapi.service=bridge-svc
-
-      - traefik.http.routers.bridge-docs.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && (Path(`/bridge/docs`) || PathPrefix(`/bridge/docs/`) || Path(`/bridge/redoc`) || PathPrefix(`/bridge/redoc/`))
-      - traefik.http.routers.bridge-docs.entrypoints=websecure
-      - traefik.http.routers.bridge-docs.tls.certresolver=le
-      - traefik.http.routers.bridge-docs.middlewares=bridge-strip
-      - traefik.http.routers.bridge-docs.priority=600
-      - traefik.http.routers.bridge-docs.service=bridge-svc
-    networks:
-      - sparknet
 
   kafka-redis-consumer:
     image: iotkafkaacrwtvgek.azurecr.io/kafka-redis-consumer:latest
@@ -213,9 +95,9 @@ services:
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
       REDIS_HOST: "redis"
-      REDIS_PASSWORD: "1234"
-    networks:
-      - sparknet
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    # usa a rede default do compose
+
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
@@ -238,49 +120,14 @@ services:
       - DB_URL=postgresql://pi_3kd2_user:fbin7xBZxv5lkfP7gUJrpP2BtUbeyxRn@dpg-d44n3duuk2gs73fi8jag-a.oregon-postgres.render.com/pi_3kd2
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=1234
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || curl -sf http://localhost:3000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-    labels:
-      - traefik.enable=true
-
-      - traefik.http.routers.nest-root.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/nest`)
-      - traefik.http.routers.nest-root.entrypoints=websecure
-      - traefik.http.routers.nest-root.tls.certresolver=le
-      - traefik.http.middlewares.nest-slash.redirectregex.regex=^/nest$
-      - traefik.http.middlewares.nest-slash.redirectregex.replacement=/nest/
-      - traefik.http.middlewares.nest-slash.redirectregex.permanent=true
-      - traefik.http.routers.nest-root.middlewares=nest-slash
-      - traefik.http.routers.nest-root.priority=500
-
-      - traefik.http.routers.nest.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/nest/`)
-      - traefik.http.routers.nest.entrypoints=websecure
-      - traefik.http.routers.nest.tls.certresolver=le
-      - traefik.http.middlewares.nest-strip.stripPrefix.prefixes=/nest
-      - traefik.http.middlewares.nest-xfp.headers.customrequestheaders.X-Forwarded-Prefix=/nest
-      - traefik.http.routers.nest.middlewares=nest-strip,nest-xfp
-      - traefik.http.routers.nest.priority=400
-      - traefik.http.routers.nest.service=nest-svc
-      - traefik.http.services.nest-svc.loadbalancer.server.port=3000
-
-      - traefik.http.routers.nest-openapi.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/nest/openapi.json`)
-      - traefik.http.routers.nest-openapi.entrypoints=websecure
-      - traefik.http.routers.nest-openapi.tls.certresolver=le
-      - traefik.http.routers.nest-openapi.middlewares=nest-strip
-      - traefik.http.routers.nest-openapi.priority=600
-      - traefik.http.routers.nest-openapi.service=nest-svc
-
-      - traefik.http.routers.nest-docs.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && (Path(`/nest/docs`) || PathPrefix(`/nest/docs/`) || Path(`/nest/redoc`) || PathPrefix(`/nest/redoc/`))
-      - traefik.http.routers.nest-docs.entrypoints=websecure
-      - traefik.http.routers.nest-docs.tls.certresolver=le
-      - traefik.http.routers.nest-docs.middlewares=nest-strip
-      - traefik.http.routers.nest-docs.priority=600
-      - traefik.http.routers.nest-docs.service=nest-svc
-    networks:
-      - sparknet
+    ports:
+      - "127.0.0.1:3000:3000"   # Nginx (host) acessa aqui
 
   spark:
     image: iotkafkaacrwtvgek.azurecr.io/spark:latest
@@ -291,54 +138,12 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=1234
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
       - API_URL=http://nest-api:3000/data-process
       - SILO_CONF_URL=http://nest-api:3000/silos/conf
       - PORT=8080
-    labels:
-      - traefik.enable=true
-
-      - traefik.http.routers.spark-root.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/spark`)
-      - traefik.http.routers.spark-root.entrypoints=websecure
-      - traefik.http.routers.spark-root.tls.certresolver=le
-      - traefik.http.middlewares.spark-slash.redirectregex.regex=^/spark$
-      - traefik.http.middlewares.spark-slash.redirectregex.replacement=/spark/
-      - traefik.http.middlewares.spark-slash.redirectregex.permanent=true
-      - traefik.http.routers.spark-root.middlewares=spark-slash
-      - traefik.http.routers.spark-root.priority=500
-
-      - traefik.http.routers.spark.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && PathPrefix(`/spark/`)
-      - traefik.http.routers.spark.entrypoints=websecure
-      - traefik.http.routers.spark.tls.certresolver=le
-      - traefik.http.middlewares.spark-strip.stripPrefix.prefixes=/spark
-      - traefik.http.middlewares.spark-xfp.headers.customrequestheaders.X-Forwarded-Prefix=/spark
-      - traefik.http.routers.spark.middlewares=spark-strip,spark-xfp
-      - traefik.http.routers.spark.priority=400
-      - traefik.http.routers.spark.service=spark-svc
-      - traefik.http.services.spark-svc.loadbalancer.server.port=8080
-
-      - traefik.http.routers.spark-openapi.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && Path(`/spark/openapi.json`)
-      - traefik.http.routers.spark-openapi.entrypoints=websecure
-      - traefik.http.routers.spark-openapi.tls.certresolver=le
-      - traefik.http.routers.spark-openapi.middlewares=spark-strip
-      - traefik.http.routers.spark-openapi.priority=600
-      - traefik.http.routers.spark-openapi.service=spark-svc
-
-      - traefik.http.routers.spark-docs.rule=Host(`iot-kafka-pip.northcentralus.cloudapp.azure.com`) && (Path(`/spark/docs`) || PathPrefix(`/spark/docs/`) || Path(`/spark/redoc`) || PathPrefix(`/spark/redoc/`))
-      - traefik.http.routers.spark-docs.entrypoints=websecure
-      - traefik.http.routers.spark-docs.tls.certresolver=le
-      - traefik.http.routers.spark-docs.middlewares=spark-strip
-      - traefik.http.routers.spark-docs.priority=600
-      - traefik.http.routers.spark-docs.service=spark-svc
-    networks:
-      - sparknet
+    # sem publish; roda interno
 
 volumes:
   redpanda_data:
-  traefik_letsencrypt:
   redis_data:
-
-networks:
-  sparknet:
-    driver: bridge
-    name: sparknet      # <- nome fixo para casar com o Traefik
