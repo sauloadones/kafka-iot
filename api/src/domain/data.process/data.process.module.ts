@@ -4,9 +4,10 @@ import { DataProcessController } from './data.process.controller';
 import { DataProcess } from './entities/data.process.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SilosModule } from '../silos/silos.module';
+import { AlertsModule } from '../alerts/alerts.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([DataProcess]), SilosModule],
+  imports: [TypeOrmModule.forFeature([DataProcess]), SilosModule, AlertsModule],
   controllers: [DataProcessController],
   providers: [DataProcessService],
 })

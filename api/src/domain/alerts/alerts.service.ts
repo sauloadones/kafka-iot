@@ -17,34 +17,51 @@ export class AlertsService {
   ) {}
 
   async create(dto: CreateAlertDto): Promise<Alert> {
-  const { siloId, ...alertData } = dto;
-  const silo = await this.siloRepo.findOne({
-    where: { id: siloId },
-    relations: ['company'],
-  });
-  if (!silo) {
-    throw new NotFoundException(`Silo #${siloId} not found`);
+    const { siloId, ...alertData } = dto;
+    const silo = await this.siloRepo.findOne({
+      where: { id: siloId },
+      relations: ['company'],
+    });
+    if (!silo) {
+      throw new NotFoundException(`Silo #${siloId} not found`);
+    }
+    const companyId = silo.company.id;
+    const alert = this.alertRepo.create({
+      ...alertData,
+      silo: { id: siloId },
+    });
+    const savedAlert = await this.alertRepo.save(alert);
+    const alertForEvent = {
+      ...savedAlert,
+      silo: { id: silo.id, name: silo.name },
+    };
+    this.eventEmitter.emit('alert.created', {
+      alert: alertForEvent,
+      companyId: companyId,
+    });
+    savedAlert.silo = silo;
+    return savedAlert;
   }
-  const companyId = silo.company.id;
-  const alert = this.alertRepo.create({
-    ...alertData,
-    silo: { id: siloId },
-  });
-  const savedAlert = await this.alertRepo.save(alert);
-  const alertForEvent = {
-    ...savedAlert,
-    silo: { id: silo.id, name: silo.name },
-  };
-  this.eventEmitter.emit('alert.created', {
-    alert: alertForEvent,
-    companyId: companyId,
-  });
-  savedAlert.silo = silo;
-  return savedAlert;
-}
 
   async findAll(): Promise<Alert[]> {
     return this.alertRepo.find({ relations: ['silo'] });
+  }
+
+  async findBySilo(siloId: number): Promise<Alert[]> {
+    return this.alertRepo.find({
+      where: { silo: { id: siloId } },
+      relations: ['silo'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async findLastFive(siloId: number): Promise<Alert[]> {
+    return this.alertRepo.find({
+      where: { silo: { id: siloId } },
+      relations: ['silo'],
+      order: { createdAt: 'DESC' },
+      take: 5,
+    });
   }
 
   async findOne(id: number): Promise<Alert> {

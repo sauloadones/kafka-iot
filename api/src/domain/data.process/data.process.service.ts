@@ -8,6 +8,7 @@ import {
 } from './dto/data.process.dto';
 import { Silo } from 'src/domain/silos/entities/silo.entity';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AlertsService } from '../alerts/alerts.service';
 
 @Injectable()
 export class DataProcessService {
@@ -17,6 +18,7 @@ export class DataProcessService {
     @InjectRepository(Silo)
     private readonly siloRepo: Repository<Silo>,
     private eventEmitter: EventEmitter2,
+    private readonly alertsService: AlertsService,
   ) {}
 
   async create(dto: CreateDataProcessDto): Promise<DataProcess> {
@@ -47,6 +49,32 @@ export class DataProcessService {
       companyId: companyId,
     });
     savedData.silo = silo;
+    
+    // ----- ALERTA: Temperatura -----
+    if (
+      silo.maxTemperature &&
+      savedData.averageTemperature > silo.maxTemperature
+    ) {
+      await this.alertsService.create({
+        siloId: silo.id,
+        type: 'temperature',
+        level: 'critical',
+        currentValue: savedData.averageTemperature,
+        message: `Temperatura média ${savedData.averageTemperature}°C acima do limite de ${silo.maxTemperature}°C`,
+      });
+    }
+
+    // ----- ALERTA: Umidade -----
+    if (silo.maxHumidity && savedData.averageHumidity > silo.maxHumidity) {
+      await this.alertsService.create({
+        siloId: silo.id,
+        type: 'humidity',
+        level: 'critical',
+        currentValue: savedData.averageHumidity,
+        message: `Umidade média ${savedData.averageHumidity}% acima do limite de ${silo.maxHumidity}%`,
+      });
+    }
+
     return savedData;
   }
 
@@ -64,7 +92,7 @@ export class DataProcessService {
     }
     return dataProcess;
   }
-  
+
   async update(id: number, dto: UpdateDataProcessDto): Promise<DataProcess> {
     const { siloId, ...data } = dto;
     const dataProcess = await this.dataRepo.preload({

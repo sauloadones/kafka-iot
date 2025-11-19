@@ -9,7 +9,8 @@ import {
 } from '@nestjs/common';
 import { AlertsService } from './alerts.service';
 import { CreateAlertDto, ReadAlertDto, UpdateAlertDto } from './dto/alert.dto';
-import { plainToInstance } from 'class-transformer'; 
+import { plainToInstance } from 'class-transformer';
+import { Public } from '../auth/decorators/decorator.jwt';
 
 @Controller('alerts')
 export class AlertsController {
@@ -23,18 +24,19 @@ export class AlertsController {
     });
   }
 
-  @Get()
-  async findAll(): Promise<ReadAlertDto[]> {
-    const alerts = await this.alertsService.findAll();
+  @Public()
+  @Get('silo/:siloId')
+  async findBySilo(@Param('siloId') siloId: string) {
+    const alerts = await this.alertsService.findBySilo(+siloId);
     return plainToInstance(ReadAlertDto, alerts, {
       excludeExtraneousValues: true,
     });
   }
-
-  @Get(':id')
-  async findOne(@Param('id') id: string): Promise<ReadAlertDto> {
-    const alert = await this.alertsService.findOne(+id);
-    return plainToInstance(ReadAlertDto, alert, {
+  @Public()
+  @Get('silo/:siloId/recent')
+  async findRecent(@Param('siloId') siloId: string) {
+    const alerts = await this.alertsService.findLastFive(+siloId);
+    return plainToInstance(ReadAlertDto, alerts, {
       excludeExtraneousValues: true,
     });
   }
