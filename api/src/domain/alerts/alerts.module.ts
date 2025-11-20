@@ -9,5 +9,6 @@ import { SilosModule } from '../silos/silos.module';
   imports: [TypeOrmModule.forFeature([Alert]), SilosModule],
   controllers: [AlertsController],
   providers: [AlertsService],
+  exports: [AlertsService],
 })
 export class AlertsModule {}
