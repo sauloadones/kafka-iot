@@ -15,7 +15,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
           type: 'postgres',
           url: dbUrl,
           autoLoadEntities: true,
-          synchronize: true,
+          synchronize: false,
           ssl:
             configService.get<string>('NODE_ENV') === 'production'
               ? { rejectUnauthorized: false }

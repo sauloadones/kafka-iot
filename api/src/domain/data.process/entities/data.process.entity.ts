@@ -56,10 +56,10 @@ export class DataProcess {
   stdAirQuality: number;
 
   // Alertas
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'float', default: 0 })
   alertsCount: number;
 
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'float', default: 0 })
   criticalAlertsCount: number;
 
   // Outros indicadores
