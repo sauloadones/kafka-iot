@@ -1,6 +1,7 @@
-import { IsNumber, IsOptional, IsDate } from 'class-validator';
+import { IsNumber, IsOptional, IsDate, IsString } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
 import { Exclude, Expose, Transform, Type } from 'class-transformer';
+
 
 export class CreateDataProcessDto {
   @IsNumber()
@@ -77,6 +78,17 @@ export class CreateDataProcessDto {
   @IsNumber()
   @IsOptional()
   environmentScore?: number;
+
+  // SPOILAGE RISK 
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  spoilageRiskProbability?: number; // 0.0 a 1.0 (0% a 100%)
+
+  @IsString()
+  @IsOptional()
+  spoilageRiskCategory?: string; // "BAIXO", "MODERADO", "ALTO", "CRÍTICO"
+  //
 }
 
 export class UpdateDataProcessDto extends PartialType(CreateDataProcessDto) {}
@@ -140,6 +152,14 @@ export class ReadDataProcessDto {
 
   @Expose()
   environmentScore?: number;
+
+  // ====== NOVOS CAMPOS: SPOILAGE RISK ======
+  @Expose()
+  spoilageRiskProbability?: number; // Probability 0.0-1.0
+
+  @Expose()
+  spoilageRiskCategory?: string; // Risk category name
+  // =========================================
 
   @Expose()
   createdAt: Date;

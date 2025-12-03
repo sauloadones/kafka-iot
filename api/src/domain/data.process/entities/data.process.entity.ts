@@ -74,4 +74,10 @@ export class DataProcess {
 
   @CreateDateColumn()
   createdAt: Date;
+
+  @Column({ type: 'float', nullable: true })
+  spoilageRiskProbability: number;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  spoilageRiskCategory: string;
 }

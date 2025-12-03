@@ -3,3 +3,4 @@ redis
 requests
 pandas
 numpy
+scikit-learn
