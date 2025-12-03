@@ -36,7 +36,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o script principal
-COPY spark_data_process_service.py .
+# Copia o script principal E o modelo
+COPY spark_data_process_service.py spoilage_model.py .
+
 
 # Variáveis padrão
 ENV REDIS_HOST=localhost
