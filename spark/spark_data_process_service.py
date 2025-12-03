@@ -10,7 +10,7 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
 import os
-from spoilage_model import GrainSpoilagePredictor
+from spark.spoilage_model import GrainSpoilagePredictor
 
 
 # CONFIGURAÇÕES
