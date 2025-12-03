@@ -37,14 +37,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o script principal
 # Copia o script principal E o modelo
-COPY spark_data_process_service.py spoilage_model.py .
+COPY spark_data_process_service.py .
+COPY spoilage_model.py .
 
 
 # Variáveis padrão
 ENV REDIS_HOST=localhost
 ENV REDIS_PORT=6379
 ENV REDIS_PASSWORD=1234
-ENV API_URL=http://nest:3000/data-process
+ENV API_URL=https://nest:3000/data-process
 
 # Comando padrão
 CMD ["spark-submit", "spark_data_process_service.py"]

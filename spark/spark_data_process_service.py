@@ -18,11 +18,11 @@ from spoilage_model import GrainSpoilagePredictor
 REDIS_HOST = os.getenv("REDIS_HOST", "iot-kafka-pip.northcentralus.cloudapp.azure.com")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "1234")
-API_URL = os.getenv("API_URL", "http://nest-api:3000/data-process")
-SILO_CONF_URL = os.getenv("SILO_CONF_URL", "http://nest-api:3000/silos/conf")
+API_URL = os.getenv("API_URL", "https://nest-api:3000/data-process")
+SILO_CONF_URL = os.getenv("SILO_CONF_URL", "https://nest-api:3000/silos/conf")
 
 # URL base para buscar dados do silo (ex: /silos/1)
-SILO_API_URL = os.getenv("SILO_API_URL", "http://nest-api:3000/silos") 
+SILO_API_URL = os.getenv("SILO_API_URL", "https://nest-api:3000/silos") 
 
 DEVICE_TO_SILO = {
     "0C4EA065A598": 1,

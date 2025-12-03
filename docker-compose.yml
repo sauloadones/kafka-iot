@@ -83,7 +83,9 @@ services:
       MQTT_PORT: 1883
       KAFKA_BROKER: "redpanda:29092"
       KAFKA_TOPIC: "iot-data"
-
+    ports:
+    - "127.0.0.1:8090:8000"
+  
   kafka-redis-consumer:
     image: iotkafkaacrwtvgek.azurecr.io/kafka-redis-consumer:latest
     container_name: kafka-redis-consumer
@@ -95,9 +97,7 @@ services:
       REDIS_HOST: "redis"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
     # usa a rede default do compose
-    ports:
-    # host:contêiner → Nginx falará com 127.0.0.1:8090
-    - "127.0.0.1:8090:8000"
+  
 
   watchtower:
     image: containrrr/watchtower
@@ -106,7 +106,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /home/azureuser/.docker/config.json:/config.json:ro
-    command: --interval 60 --cleanup mqtt-kafka-bridge kafka-redis-consumer
+    command: --interval 60 --cleanup mqtt-kafka-bridge kafka-redis-consumer spark-job nest-api
 
   nest:
     image: iotkafkaacrwtvgek.azurecr.io/nest:latest
@@ -140,8 +140,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - API_URL=http://nest-api:3000/data-process
-      - SILO_CONF_URL=http://nest-api:3000/silos/conf
+      - API_URL=https://nest-api:3000/data-process
+      - SILO_CONF_URL=https://nest-api:3000/silos/conf
       - PORT=8080
     # sem publish; roda interno
 
