@@ -140,8 +140,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - API_URL=https://nest-api:3000/data-process
-      - SILO_CONF_URL=https://nest-api:3000/silos/conf
+      - API_URL=http://nest-api:3000/data-process
+      - SILO_CONF_URL=http://nest-api:3000/silos/conf
       - PORT=8080
     # sem publish; roda interno
 
