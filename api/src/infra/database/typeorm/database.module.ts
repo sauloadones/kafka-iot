@@ -16,10 +16,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
           url: dbUrl,
           autoLoadEntities: true,
           synchronize: true,
-          ssl:
-            configService.get<string>('NODE_ENV') === 'production'
-              ? { rejectUnauthorized: false }
-              : false,
+          ssl: false,
         };
       },
     }),
